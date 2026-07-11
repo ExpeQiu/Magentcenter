@@ -1,0 +1,10 @@
+# 预置工作区（启动时自动同步）
+workspaces:
+  - id: ws-cyber
+    slug: cyber
+    name: Cyber 团队
+    description: 默认工作区，Agent 编排主战场
+  - id: ws-geely
+    slug: geely
+    name: 吉利融合
+    description: Geelyronghe 业务线

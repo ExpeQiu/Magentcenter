@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# AgentCenter CLI 入口 (ac)
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BACKEND="$ROOT/backend"
+
+if [[ -f "$ROOT/.env" ]]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$ROOT/.env"
+  set +a
+fi
+
+if [[ -d "$BACKEND/.venv" ]]; then
+  # shellcheck disable=SC1091
+  source "$BACKEND/.venv/bin/activate"
+fi
+
+cd "$BACKEND"
+exec python -m app.cli "$@"

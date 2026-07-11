@@ -1,0 +1,33 @@
+# AgentCenter 预置小队配置
+# leader 负责路由决策，members 为小队成员 Agent ID
+
+squads:
+  - id: dev_squad
+    name: 敏捷开发小队
+    leader: pm
+    members: [pm, coder, coder2, coder3, qa, deploy-agent]
+    description: 产品开发全流程
+
+  - id: ops_squad
+    name: 运维小队
+    leader: ops
+    members: [ops, ops-agent, deploy-agent]
+    description: 系统运维与部署
+
+  - id: content_squad
+    name: 内容运营小队
+    leader: writer
+    members: [writer, analyst, reporter, multi-channel-ops, brand-compliance]
+    description: 内容创作与运营
+
+  - id: research_squad
+    name: 超级作战队
+    leader: ai-researcher
+    members: [ai-researcher, ai-expert, coder-pro, solution-architect, github-agent]
+    description: AI 研究与高级开发
+
+  - id: command
+    name: 指挥部
+    leader: main
+    members: [main, pmo, hr, qiqi]
+    description: 全局指挥与协调

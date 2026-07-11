@@ -1,0 +1,38 @@
+# 预置项目（启动时自动同步到数据库）
+projects:
+  - id: agentcenter
+    workspace_slug: cyber
+    name: AgentCenter
+    description: OpenClaw Agent 编排中台本体
+    color: indigo
+    lead_type: agent
+    lead_id: main
+    resources:
+      - resource_type: github_repo
+        label: AgentCenter Repo
+        ref:
+          url: https://github.com/example/agentcenter
+          ref: main
+      - resource_type: local_directory
+        label: 本地开发目录
+        ref:
+          local_path: /Volumes/Lexar/git/20 AIteam/AgentCenter
+  - id: geely
+    workspace_slug: geely
+    name: 吉利融合
+    description: Geelyronghe 相关业务
+    color: emerald
+    lead_type: agent
+    lead_id: coder
+    resources:
+      - resource_type: local_directory
+        label: Geelyronghe 工作区
+        ref:
+          local_path: /Volumes/Lexar/git/Geelyronghe
+  - id: ops
+    workspace_slug: cyber
+    name: 运维巡检
+    description: 定时巡检与自动化任务
+    color: amber
+    lead_type: agent
+    lead_id: main
