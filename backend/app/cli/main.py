@@ -70,6 +70,9 @@ def cmd_agents(args: argparse.Namespace) -> int:
                 ("default", "DEFAULT"),
             ],
         )
+    elif args.agents_cmd == "stats":
+        data = client.agent_stats()
+        _emit(data, as_json=args.json)
     else:
         data = client.get_agent(args.agent_id)
         _emit(data, as_json=args.json)
@@ -295,6 +298,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_agents_list = agents_sub.add_parser("list", help="列出 Agent")
     p_agents_list.add_argument("--refresh", action="store_true", help="强制刷新缓存")
     p_agents_list.set_defaults(func=cmd_agents)
+    p_agents_stats = agents_sub.add_parser("stats", help="Agent 任务统计")
+    p_agents_stats.set_defaults(func=cmd_agents)
     p_agents_get = agents_sub.add_parser("get", help="查看 Agent 详情")
     p_agents_get.add_argument("agent_id")
     p_agents_get.set_defaults(func=cmd_agents)

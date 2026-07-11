@@ -8,7 +8,7 @@ import { useWorkspacePaths } from "@/lib/context/workspace-context";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { AgentPicker } from "@/components/pickers/agent-picker";
-import { formatTime } from "@/components/ui/status-badge";
+import { StatusBadge, formatTime } from "@/components/ui/status-badge";
 
 export function AutopilotsPage() {
   const [items, setItems] = useState<AutopilotInfo[]>([]);
@@ -18,12 +18,13 @@ export function AutopilotsPage() {
   const [agentId, setAgentId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [cron, setCron] = useState("3600");
+  const [syncOpenclaw, setSyncOpenclaw] = useState(false);
   const router = useRouter();
   const wp = useWorkspacePaths();
 
   const load = () =>
     api
-      .autopilots()
+      .autopilots(true)
       .then(setItems)
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -35,7 +36,13 @@ export function AutopilotsPage() {
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      await api.createAutopilot({ name, agent_id: agentId, prompt, cron });
+      await api.createAutopilot({
+        name,
+        agent_id: agentId,
+        prompt,
+        cron,
+        sync_to_openclaw: syncOpenclaw,
+      });
       setShowForm(false);
       setName("");
       setPrompt("");
@@ -48,7 +55,12 @@ export function AutopilotsPage() {
   const trigger = async (id: string) => {
     try {
       const task = await api.triggerAutopilot(id);
-      router.push(wp.taskDetail(task.id));
+      if (!id.startsWith("openclaw:")) {
+        router.push(wp.taskDetail(task.id));
+      } else {
+        alert("OpenClaw Cron 已触发");
+        load();
+      }
     } catch {
       alert("触发失败");
     }
@@ -58,7 +70,7 @@ export function AutopilotsPage() {
     <>
       <PageHeader
         title="Autopilot"
-        description="定时自动触发 Agent 巡检"
+        description="本地定时 + OpenClaw Cron 镜像"
         actions={
           <button
             onClick={() => setShowForm(!showForm)}
@@ -90,13 +102,18 @@ export function AutopilotsPage() {
           <input
             value={cron}
             onChange={(e) => setCron(e.target.value)}
-            placeholder="间隔秒数 / hourly / daily"
+            placeholder="间隔秒数 / hourly / daily / cron 表达式"
             className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
           />
-          <button
-            type="submit"
-            className="rounded-lg bg-indigo-600 px-4 py-2 text-sm"
-          >
+          <label className="flex items-center gap-2 text-sm text-slate-400">
+            <input
+              type="checkbox"
+              checked={syncOpenclaw}
+              onChange={(e) => setSyncOpenclaw(e.target.checked)}
+            />
+            同步到 OpenClaw Cron
+          </label>
+          <button type="submit" className="rounded-lg bg-indigo-600 px-4 py-2 text-sm">
             创建
           </button>
         </form>
@@ -111,8 +128,10 @@ export function AutopilotsPage() {
             <thead>
               <tr className="border-b border-slate-800 bg-slate-900/80 text-left text-xs text-slate-400">
                 <th className="px-4 py-3">名称</th>
+                <th className="px-4 py-3">来源</th>
                 <th className="px-4 py-3">Agent</th>
-                <th className="px-4 py-3">Cron</th>
+                <th className="px-4 py-3">调度</th>
+                <th className="px-4 py-3">状态</th>
                 <th className="px-4 py-3">上次运行</th>
                 <th className="px-4 py-3"></th>
               </tr>
@@ -121,8 +140,14 @@ export function AutopilotsPage() {
               {items.map((a) => (
                 <tr key={a.id} className="border-t border-slate-800/80">
                   <td className="px-4 py-3">{a.name}</td>
+                  <td className="px-4 py-3 text-xs text-slate-500">
+                    {a.source === "openclaw" ? "OpenClaw" : "本地"}
+                  </td>
                   <td className="px-4 py-3 font-mono text-xs">{a.agent_id}</td>
-                  <td className="px-4 py-3 text-slate-400">{a.cron}</td>
+                  <td className="px-4 py-3 text-slate-400">{a.schedule || a.cron}</td>
+                  <td className="px-4 py-3">
+                    {a.status ? <StatusBadge status={a.status} /> : "—"}
+                  </td>
                   <td className="px-4 py-3 text-xs text-slate-500">
                     {a.last_run ? formatTime(a.last_run) : "—"}
                   </td>

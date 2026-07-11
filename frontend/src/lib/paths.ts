@@ -16,6 +16,9 @@ export const paths = {
     squads: () => `/${slug}/squads`,
     autopilots: () => `/${slug}/autopilots`,
     skills: () => `/${slug}/skills`,
+    system: () => `/${slug}/system`,
+    sessions: () => `/${slug}/sessions`,
+    sessionDetail: (id: string) => `/${slug}/sessions/${enc(id)}`,
   }),
 } as const;
 
@@ -27,4 +30,6 @@ export const LEGACY_PREFIXES = [
   "squads",
   "autopilots",
   "skills",
+  "system",
+  "sessions",
 ] as const;

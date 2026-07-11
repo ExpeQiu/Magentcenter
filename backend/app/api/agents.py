@@ -2,9 +2,16 @@
 
 from fastapi import APIRouter, HTTPException, Request
 
-from app.models.schemas import AgentInfo
+from app.models.schemas import AgentInfo, AgentStats
 
 router = APIRouter(prefix="/api/agents", tags=["agents"])
+
+
+@router.get("/stats", response_model=list[AgentStats])
+async def agent_stats(request: Request) -> list[AgentStats]:
+    tm = request.app.state.task_manager
+    rows = await tm.get_agent_stats()
+    return [AgentStats(**r) for r in rows]
 
 
 @router.get("", response_model=list[AgentInfo])

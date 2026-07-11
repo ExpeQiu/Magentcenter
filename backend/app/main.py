@@ -7,12 +7,14 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agents, orchestration, projects, tasks, workspaces, ws
+from app.api import agents, orchestration, projects, system, tasks, workspaces, ws
 from app.config import get_settings
 from app.core.agent_registry import AgentRegistry
 from app.core import projects as project_service
 from app.core import workspaces as workspace_service
 from app.core.autopilot import AutopilotManager
+from app.core.cron_alerts import CronAlertWatcher
+from app.core.openclaw_monitor import OpenClawMonitor
 from app.core.task_manager import TaskManager
 from app.logging_setup import setup_logging
 from app.models.db import create_tables, init_db
@@ -37,11 +39,16 @@ async def lifespan(app: FastAPI):
 
     registry = AgentRegistry(settings)
     task_manager = TaskManager(settings, registry)
-    autopilot_manager = AutopilotManager(task_manager)
-    autopilot_manager.start()
+    monitor = OpenClawMonitor(settings)
+    autopilot_manager = AutopilotManager(settings, task_manager)
+    alert_watcher = CronAlertWatcher(settings, monitor)
+    await autopilot_manager.start()
+    alert_watcher.start()
     app.state.registry = registry
     app.state.task_manager = task_manager
     app.state.autopilot_manager = autopilot_manager
+    app.state.monitor = monitor
+    app.state.alert_watcher = alert_watcher
     app.state.settings = settings
 
     ok, version = await registry.check_health()
@@ -52,6 +59,7 @@ async def lifespan(app: FastAPI):
         version,
     )
     yield
+    alert_watcher.stop()
     autopilot_manager.stop()
     logger.info("AgentCenter shutting down")
 
@@ -88,6 +96,7 @@ def create_app() -> FastAPI:
     app.include_router(projects.router)
     app.include_router(tasks.router)
     app.include_router(orchestration.router)
+    app.include_router(system.router)
     app.include_router(ws.router)
     return app
 

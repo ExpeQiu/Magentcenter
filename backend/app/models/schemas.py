@@ -23,6 +23,13 @@ class AgentInfo(BaseModel):
     is_default: bool = False
 
 
+class AgentStats(BaseModel):
+    agent_id: str
+    task_count: int = 0
+    running_count: int = 0
+    last_active_at: datetime | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
     openclaw_available: bool
@@ -160,3 +167,22 @@ class TaskEvent(BaseModel):
     output: str = ""
     status: str = ""
     timestamp: datetime = Field(default_factory=datetime.utcnow)
+
+
+class InstallSkillRequest(BaseModel):
+    url: str = ""
+    name: str = ""
+    instructions: str = ""
+
+
+class AuditSkillRequest(BaseModel):
+    skill_id: str
+
+
+class CreateAutopilotRequest(BaseModel):
+    name: str
+    agent_id: str
+    prompt: str
+    cron: str = "3600"
+    enabled: bool = True
+    sync_to_openclaw: bool = False

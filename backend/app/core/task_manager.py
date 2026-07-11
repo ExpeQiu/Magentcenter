@@ -294,6 +294,44 @@ class TaskManager:
             rows = (await session.execute(q)).scalars().all()
             return [self._record_to_info(r) for r in rows], total
 
+    async def get_agent_stats(self) -> list[dict]:
+        factory = get_session_factory()
+        async with factory() as session:
+            total_q = (
+                select(
+                    TaskRecord.agent_id,
+                    func.count().label("task_count"),
+                    func.max(TaskRecord.updated_at).label("last_active_at"),
+                )
+                .group_by(TaskRecord.agent_id)
+            )
+            rows = (await session.execute(total_q)).all()
+            stats_map = {
+                r.agent_id: {
+                    "agent_id": r.agent_id,
+                    "task_count": int(r.task_count),
+                    "running_count": 0,
+                    "last_active_at": r.last_active_at,
+                }
+                for r in rows
+            }
+            running_q = (
+                select(TaskRecord.agent_id, func.count())
+                .where(TaskRecord.status == "running")
+                .group_by(TaskRecord.agent_id)
+            )
+            for agent_id, cnt in (await session.execute(running_q)).all():
+                if agent_id in stats_map:
+                    stats_map[agent_id]["running_count"] = int(cnt)
+                else:
+                    stats_map[agent_id] = {
+                        "agent_id": agent_id,
+                        "task_count": 0,
+                        "running_count": int(cnt),
+                        "last_active_at": None,
+                    }
+            return list(stats_map.values())
+
     async def cancel_task(self, task_id: str) -> TaskInfo | None:
         task = await self.get_task(task_id)
         if not task:

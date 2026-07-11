@@ -16,7 +16,7 @@ projects:
       - resource_type: local_directory
         label: 本地开发目录
         ref:
-          local_path: /Volumes/Lexar/git/20 AIteam/AgentCenter
+          local_path: /Users/expeqiu/Mgit/AgentCenter
   - id: geely
     workspace_slug: geely
     name: 吉利融合

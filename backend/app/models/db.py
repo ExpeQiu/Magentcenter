@@ -94,6 +94,20 @@ class TaskEventRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class AutopilotRecord(Base):
+    __tablename__ = "autopilots"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128))
+    agent_id: Mapped[str] = mapped_column(String(128), index=True)
+    prompt: Mapped[str] = mapped_column(Text)
+    cron: Mapped[str] = mapped_column(String(64), default="3600")
+    enabled: Mapped[bool] = mapped_column(Integer, default=1)
+    openclaw_id: Mapped[str] = mapped_column(String(64), default="")
+    last_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 _engine = None
 _session_factory = None
 

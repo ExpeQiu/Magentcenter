@@ -1,3 +1,10 @@
+export interface AgentStats {
+  agent_id: string;
+  task_count: number;
+  running_count: number;
+  last_active_at: string | null;
+}
+
 export interface AgentInfo {
   id: string;
   name: string;
@@ -103,6 +110,75 @@ export interface AutopilotInfo {
   enabled: boolean;
   last_run: string | null;
   created_at: string;
+  source?: string;
+  openclaw_id?: string;
+  status?: string;
+  schedule?: string;
+}
+
+export interface GatewayStatus {
+  running: boolean;
+  pid: number;
+  port: number;
+  version: string;
+  dashboard_url: string;
+  probe_ok: boolean;
+}
+
+export interface CronJobInfo {
+  id: string;
+  name: string;
+  agent_id: string;
+  schedule: string;
+  status: string;
+  enabled: boolean;
+  next_run: string;
+  last_run: string;
+  last_status: string;
+  source: string;
+}
+
+export interface SessionMessage {
+  role: string;
+  content: string;
+  timestamp: string;
+}
+
+export interface SessionDetail {
+  session_id: string;
+  agent_id: string;
+  key: string;
+  model: string;
+  updated_at: string;
+  total_tokens: number;
+  messages: SessionMessage[];
+}
+
+export interface SessionInfo {
+  session_id: string;
+  agent_id: string;
+  key: string;
+  model: string;
+  updated_at: string;
+  age_ms: number;
+  total_tokens: number;
+  kind: string;
+}
+
+export interface RecentAlert {
+  at: string;
+  count: number;
+  sent: boolean;
+  jobs: string[];
+}
+
+export interface SystemStatus {
+  gateway: GatewayStatus;
+  cron_jobs: CronJobInfo[];
+  cron_errors: CronJobInfo[];
+  sessions_count: number;
+  sessions: SessionInfo[];
+  checked_at: string;
 }
 
 export interface HealthResponse {

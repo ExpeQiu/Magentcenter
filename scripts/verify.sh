@@ -54,6 +54,12 @@ check "小队列表" "'$AC' --json squads list | python3 -c \"import sys,json; d
 
 check "技能目录" "'$AC' --json skills | python3 -c \"import sys,json; json.load(sys.stdin)\""
 
+check "Agent 统计" "'$AC' --json agents stats | python3 -c \"import sys,json; json.load(sys.stdin)\""
+
+check "系统状态" "curl -sf '$BASE_URL/api/system-status' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert 'gateway' in d\""
+
+check "Sessions" "curl -sf '$BASE_URL/api/sessions' | python3 -c \"import sys,json; json.load(sys.stdin)\""
+
 echo ""
 echo "=== 结果: $pass 通过, $fail 失败 ==="
 if [[ $fail -gt 0 ]]; then

@@ -2,6 +2,7 @@
 
 import { PageHeader } from "@/components/layout/page-header";
 import { TaskSurface } from "@/components/task-surface/task-surface";
+import { QuickStatsBar } from "./quick-stats-bar";
 import { useModal } from "@/lib/context/modal-context";
 
 export function TasksPage() {
@@ -21,6 +22,7 @@ export function TasksPage() {
           </button>
         }
       />
+      <QuickStatsBar />
       <TaskSurface />
     </>
   );

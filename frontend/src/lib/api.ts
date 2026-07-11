@@ -1,11 +1,16 @@
 import type {
   AgentInfo,
+  AgentStats,
   AutopilotInfo,
   HealthResponse,
   ProjectInfo,
   ProjectResourceInfo,
+  RecentAlert,
+  SessionDetail,
+  SessionInfo,
   SkillInfo,
   SquadInfo,
+  SystemStatus,
   TaskInfo,
   TaskListResponse,
   WorkspaceInfo,
@@ -30,6 +35,7 @@ export const api = {
     request<WorkspaceInfo>(`/api/workspaces/by-slug/${encodeURIComponent(slug)}`),
   agents: (refresh = false) =>
     request<AgentInfo[]>(`/api/agents?refresh=${refresh}`),
+  agentStats: () => request<AgentStats[]>("/api/agents/stats"),
   agent: (id: string) => request<AgentInfo>(`/api/agents/${id}`),
   tasks: (
     page = 1,
@@ -139,12 +145,36 @@ export const api = {
       body: JSON.stringify({ squad_id: squadId, prompt }),
     }),
   skills: () => request<SkillInfo[]>("/api/skills"),
-  autopilots: () => request<AutopilotInfo[]>("/api/autopilots"),
+  installSkill: (data: { url?: string; name?: string; instructions?: string }) =>
+    request<TaskInfo>("/api/skills/install", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  auditSkill: (skillId: string) =>
+    request<TaskInfo>("/api/skills/audit", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ skill_id: skillId }),
+    }),
+  systemStatus: (refresh = false) =>
+    request<SystemStatus>(`/api/system-status?refresh=${refresh}`),
+  sessions: (limit = 50) =>
+    request<SessionInfo[]>(`/api/sessions?limit=${limit}`),
+  sessionDetail: (sessionId: string) =>
+    request<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`),
+  recentAlerts: () =>
+    request<{ errors: unknown[]; recent_alerts: RecentAlert[] }>("/api/cron-alerts"),
+  autopilots: (includeOpenclaw = true) =>
+    request<AutopilotInfo[]>(
+      `/api/autopilots?include_openclaw=${includeOpenclaw}`
+    ),
   createAutopilot: (data: {
     name: string;
     agent_id: string;
     prompt: string;
     cron?: string;
+    sync_to_openclaw?: boolean;
   }) =>
     request<AutopilotInfo>("/api/autopilots", {
       method: "POST",

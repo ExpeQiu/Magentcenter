@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     max_concurrent_tasks: int = 3
     agent_serial_execution: bool = True
 
+    feishu_webhook_url: str = ""
+    cron_alert_interval: int = 300
+    skills_dir: str = ""
+
 
 @lru_cache
 def get_settings() -> Settings:

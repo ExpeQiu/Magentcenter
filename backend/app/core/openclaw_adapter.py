@@ -156,21 +156,25 @@ def _try_parse_result_blob(text: str) -> dict | None:
         data = json.loads(text)
     except json.JSONDecodeError:
         return None
-    if "payloads" in data or data.get("meta", {}).get("durationMs"):
+    # Support both direct payloads (local) and nested result.payloads (gateway)
+    inner = data if "payloads" in data else data.get("result", {})
+    if "payloads" in inner or inner.get("meta", {}).get("durationMs"):
         return data
     return None
 
 
 def _extract_from_result(data: dict) -> tuple[str, str, TokenUsage | None, str]:
     output_parts: list[str] = []
-    for p in data.get("payloads", []):
+    # Support both direct payloads (local) and nested result.payloads (gateway)
+    inner = data if "payloads" in data else data.get("result", {})
+    for p in inner.get("payloads", []):
         if isinstance(p, dict) and p.get("text"):
             output_parts.append(p["text"])
 
     session_id = ""
     model = ""
-    usage = None
-    meta = data.get("meta", {})
+    usage: TokenUsage | None = None
+    meta = inner.get("meta", {})
     agent_meta = meta.get("agentMeta", {})
     if isinstance(agent_meta, dict):
         session_id = agent_meta.get("sessionId", "")
@@ -180,7 +184,6 @@ def _extract_from_result(data: dict) -> tuple[str, str, TokenUsage | None, str]:
                 usage = _parse_usage(u)
 
     return "".join(output_parts), session_id, usage, model
-
 
 def _parse_stdout_events(buf: str) -> tuple[list[OpenClawEvent], OpenClawResult | None]:
     events: list[OpenClawEvent] = []

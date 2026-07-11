@@ -7,21 +7,31 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 PID_FILE="$ROOT/logs/agentcenter.pid"
 
-if [[ ! -f "$PID_FILE" ]]; then
-  echo "[stop] AgentCenter 未运行（无 PID 文件）"
-  exit 0
+if [[ ! -f "$PID_FILE" ]] || ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
+  pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
+  if [[ -n "$pids" ]]; then
+    echo "[stop] 停止端口 $PORT 上的进程: $pids"
+    kill $pids 2>/dev/null || true
+    sleep 1
+    pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
+    [[ -z "$pids" ]] || kill -9 $pids 2>/dev/null || true
+  fi
 fi
 
-PID=$(cat "$PID_FILE")
-if kill -0 "$PID" 2>/dev/null; then
-  echo "[stop] 停止 AgentCenter PID=$PID"
-  kill "$PID" 2>/dev/null || true
-  sleep 1
+if [[ -f "$PID_FILE" ]]; then
+  PID=$(cat "$PID_FILE")
   if kill -0 "$PID" 2>/dev/null; then
-    kill -9 "$PID" 2>/dev/null || true
+    echo "[stop] 停止 AgentCenter PID=$PID"
+    kill "$PID" 2>/dev/null || true
+    sleep 1
+    if kill -0 "$PID" 2>/dev/null; then
+      kill -9 "$PID" 2>/dev/null || true
+    fi
+    echo "[stop] 已停止"
+  else
+    echo "[stop] 进程不存在 PID=$PID"
   fi
-  echo "[stop] 已停止"
+  rm -f "$PID_FILE"
 else
-  echo "[stop] 进程不存在 PID=$PID"
+  echo "[stop] AgentCenter 未运行（无 PID 文件）"
 fi
-rm -f "$PID_FILE"

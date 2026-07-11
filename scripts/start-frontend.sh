@@ -39,12 +39,9 @@ fi
 _stop_by_port
 
 echo "[frontend] 启动 Next.js (host=$FRONTEND_HOST port=$FRONTEND_PORT)..."
-# 子 shell 脱离终端会话
-(
-  nohup "$NEXT_BIN" dev -p "$FRONTEND_PORT" -H "$FRONTEND_HOST" \
-    >> "$LOG_FILE" 2>&1 </dev/null &
-  disown -a 2>/dev/null || true
-)
+nohup "$NEXT_BIN" dev -p "$FRONTEND_PORT" -H "$FRONTEND_HOST" \
+  >> "$LOG_FILE" 2>&1 </dev/null &
+disown 2>/dev/null || true
 
 for i in $(seq 1 30); do
   if lsof -nP -iTCP:"$FRONTEND_PORT" -sTCP:LISTEN >/dev/null 2>&1; then

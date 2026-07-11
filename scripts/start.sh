@@ -41,23 +41,22 @@ rm -f "$PID_FILE"
 
 echo "[start] 启动 AgentCenter API (host=$HOST port=$PORT)..."
 cd "$BACKEND"
-# 子 shell + nohup 脱离当前终端，避免会话结束时被杀掉
-(
-  nohup "$VENV/bin/uvicorn" app.main:app --host "$HOST" --port "$PORT" \
-    >> "$LOG_FILE" 2>&1 </dev/null &
-  echo $! > "$PID_FILE"
-  disown -a 2>/dev/null || true
-)
+nohup "$VENV/bin/uvicorn" app.main:app --host "$HOST" --port "$PORT" \
+  >> "$LOG_FILE" 2>&1 </dev/null &
+echo $! > "$PID_FILE"
+disown 2>/dev/null || true
 
-# 等待端口就绪
-for i in $(seq 1 15); do
+# 等待端口就绪并验证 health
+for i in $(seq 1 20); do
   if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
     pid=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)
     echo "$pid" > "$PID_FILE"
-    echo "[start] AgentCenter 已启动 PID=$pid"
-    echo "[start] API: http://localhost:$PORT/api/health"
-    echo "[start] 日志: $LOG_FILE"
-    exit 0
+    if curl -sf --max-time 3 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+      echo "[start] AgentCenter 已启动 PID=$pid"
+      echo "[start] API: http://localhost:$PORT/api/health"
+      echo "[start] 日志: $LOG_FILE"
+      exit 0
+    fi
   fi
   sleep 1
 done

@@ -61,6 +61,9 @@ class AgentCenterClient:
     def list_agents(self, refresh: bool = False) -> list[dict[str, Any]]:
         return self._request("GET", "/api/agents", params={"refresh": refresh})
 
+    def agent_stats(self) -> list[dict[str, Any]]:
+        return self._request("GET", "/api/agents/stats")
+
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         return self._request("GET", f"/api/agents/{agent_id}")
 
