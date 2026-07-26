@@ -39,6 +39,7 @@ class CronJobInfo(BaseModel):
     last_run: str = ""
     last_status: str = ""
     source: str = "openclaw"
+    runtime: str = "openclaw"
 
 
 class SessionMessage(BaseModel):
@@ -55,6 +56,7 @@ class SessionDetail(BaseModel):
     updated_at: str = ""
     total_tokens: int = 0
     messages: list[SessionMessage] = Field(default_factory=list)
+    runtime: str = "openclaw"
 
 
 class SessionInfo(BaseModel):
@@ -66,10 +68,19 @@ class SessionInfo(BaseModel):
     age_ms: int = 0
     total_tokens: int = 0
     kind: str = ""
+    runtime: str = "openclaw"
+
+
+class RuntimePane(BaseModel):
+    runtime: str
+    available: bool = False
+    version: str = ""
+    gateway: GatewayStatus = Field(default_factory=GatewayStatus)
 
 
 class SystemStatus(BaseModel):
     gateway: GatewayStatus
+    runtimes: list[RuntimePane] = Field(default_factory=list)
     cron_jobs: list[CronJobInfo] = Field(default_factory=list)
     cron_errors: list[CronJobInfo] = Field(default_factory=list)
     sessions_count: int = 0
@@ -158,6 +169,33 @@ class OpenClawMonitor:
         return status
 
     async def get_cron_jobs(self) -> list[CronJobInfo]:
+        if self.settings.ai_mock_mode:
+            return [
+                CronJobInfo(
+                    id="mock-cron-error-1",
+                    name="【Mock】定时巡检失败样例",
+                    agent_id="main",
+                    schedule="cron 0 18 * * *",
+                    status="error",
+                    enabled=True,
+                    last_run="2026-07-25T18:00:00Z",
+                    last_status="error",
+                    source="openclaw",
+                    runtime="openclaw",
+                ),
+                CronJobInfo(
+                    id="mock-cron-ok-1",
+                    name="【Mock】正常定时任务",
+                    agent_id="ops",
+                    schedule="cron 0 9 * * *",
+                    status="ok",
+                    enabled=True,
+                    last_status="ok",
+                    source="openclaw",
+                    runtime="openclaw",
+                ),
+            ]
+
         jobs: list[CronJobInfo] = []
         try:
             _, out, _ = await self._run_cmd("cron", "list", "--json", timeout=30)
@@ -175,6 +213,8 @@ class OpenClawMonitor:
                         next_run=_ms_to_iso(state.get("nextRunAtMs")),
                         last_run=_ms_to_iso(state.get("lastRunAtMs")),
                         last_status=state.get("lastRunStatus", state.get("lastStatus", "")),
+                        source="openclaw",
+                        runtime="openclaw",
                     )
                 )
         except Exception as e:
@@ -207,6 +247,7 @@ class OpenClawMonitor:
                         age_ms=int(s.get("ageMs") or 0),
                         total_tokens=int(s.get("totalTokens") or 0),
                         kind=s.get("kind", ""),
+                        runtime="openclaw",
                     )
                 )
         except Exception as e:

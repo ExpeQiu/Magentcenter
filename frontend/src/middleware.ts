@@ -26,5 +26,6 @@ export const config = {
     "/squads/:path*",
     "/autopilots/:path*",
     "/skills/:path*",
+    "/kanban/:path*",
   ],
 };

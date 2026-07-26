@@ -1,39 +1,53 @@
 # AgentCenter 预置小队配置
 # leader 负责路由决策，members 为小队成员 Agent ID
+# runtime: openclaw | hermes
 
 squads:
+  - id: hermes_core
+    name: Hermes 核心
+    runtime: hermes
+    leader: default
+    members: [default]
+    description: 本地 Hermes profile 执行（单 profile）
+
   - id: dev_squad
     name: 敏捷开发小队
+    runtime: openclaw
     leader: pm
     members: [pm, coder, coder2, coder3, qa, deploy-agent]
     description: 产品开发全流程
 
   - id: ops_squad
     name: 运维小队
+    runtime: openclaw
     leader: ops
     members: [ops, ops-agent, deploy-agent]
     description: 系统运维与部署
 
   - id: content_squad
     name: 内容运营小队
+    runtime: openclaw
     leader: writer
     members: [writer, analyst, reporter, tpd, multi-channel-ops, brand-compliance]
     description: 内容创作与运营
 
   - id: research_squad
     name: 超级作战队
+    runtime: openclaw
     leader: ai-researcher
     members: [ai-researcher, ai-expert, coder-pro, solution-architect, github-agent]
     description: AI 研究与高级开发
 
   - id: intel_squad
     name: 情报小队
+    runtime: openclaw
     leader: info-agent
     members: [info-agent, data-engineer, analyst, doc-manager]
     description: 信息情报与数据工程
 
   - id: command
     name: 指挥部
+    runtime: openclaw
     leader: main
     members: [main, pmo, hr, qiqi, skill-agent]
     description: 全局指挥与协调

@@ -5,3 +5,65 @@
 body {
   @apply bg-slate-950 text-slate-100;
 }
+
+/* 输出物 Markdown 预览 */
+.md-preview h1 {
+  @apply mb-4 mt-2 border-b border-slate-700 pb-2 text-2xl font-semibold text-slate-100;
+}
+.md-preview h2 {
+  @apply mb-3 mt-6 text-xl font-semibold text-slate-100;
+}
+.md-preview h3 {
+  @apply mb-2 mt-5 text-lg font-medium text-slate-200;
+}
+.md-preview h4 {
+  @apply mb-2 mt-4 text-base font-medium text-slate-200;
+}
+.md-preview p {
+  @apply my-3 text-slate-300;
+}
+.md-preview ul {
+  @apply my-3 list-disc space-y-1 pl-6 text-slate-300;
+}
+.md-preview ol {
+  @apply my-3 list-decimal space-y-1 pl-6 text-slate-300;
+}
+.md-preview li {
+  @apply leading-relaxed;
+}
+.md-preview strong {
+  @apply font-semibold text-slate-100;
+}
+.md-preview em {
+  @apply italic text-slate-200;
+}
+.md-preview a {
+  @apply text-indigo-300 underline underline-offset-2 hover:text-indigo-200;
+}
+.md-preview blockquote {
+  @apply my-3 border-l-2 border-slate-600 pl-4 text-slate-400;
+}
+.md-preview hr {
+  @apply my-6 border-slate-700;
+}
+.md-preview code {
+  @apply rounded bg-slate-800 px-1.5 py-0.5 font-mono text-[0.85em] text-amber-200;
+}
+.md-preview pre {
+  @apply my-4 overflow-x-auto rounded-lg border border-slate-700 bg-slate-950 p-3;
+}
+.md-preview pre code {
+  @apply bg-transparent p-0 text-xs text-slate-300;
+}
+.md-preview table {
+  @apply my-4 w-full border-collapse text-left text-sm;
+}
+.md-preview th {
+  @apply border border-slate-700 bg-slate-800/80 px-3 py-2 font-medium text-slate-200;
+}
+.md-preview td {
+  @apply border border-slate-700 px-3 py-2 text-slate-300;
+}
+.md-preview img {
+  @apply my-3 max-w-full rounded-lg;
+}

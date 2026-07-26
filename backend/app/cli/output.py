@@ -36,6 +36,7 @@ def format_task_row(task: dict[str, Any]) -> dict[str, str]:
         prompt = prompt[:37] + "..."
     return {
         "id": task.get("id", "")[:8],
+        "runtime": task.get("runtime", "openclaw"),
         "agent": task.get("agent_id", ""),
         "status": task.get("status", ""),
         "prompt": prompt,
@@ -44,6 +45,7 @@ def format_task_row(task: dict[str, Any]) -> dict[str, str]:
 
 def format_agent_row(agent: dict[str, Any]) -> dict[str, str]:
     return {
+        "runtime": agent.get("runtime", "openclaw"),
         "id": agent.get("id", ""),
         "name": agent.get("name", ""),
         "model": agent.get("model", ""),

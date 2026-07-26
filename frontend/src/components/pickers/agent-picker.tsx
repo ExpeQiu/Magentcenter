@@ -1,11 +1,28 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { AgentInfo } from "@/lib/types";
+import type { AgentInfo, RuntimeName } from "@/lib/types";
+
+export function agentRefKey(a: Pick<AgentInfo, "runtime" | "id">): string {
+  return `${a.runtime || "openclaw"}:${a.id}`;
+}
+
+export function parseAgentRef(value: string): {
+  runtime: RuntimeName;
+  agentId: string;
+} {
+  const idx = value.indexOf(":");
+  if (idx <= 0) {
+    return { runtime: "openclaw", agentId: value };
+  }
+  const runtime = value.slice(0, idx) as RuntimeName;
+  const agentId = value.slice(idx + 1);
+  return { runtime: runtime || "openclaw", agentId };
+}
 
 interface AgentPickerProps {
   value: string;
-  onChange: (id: string) => void;
+  onChange: (ref: string, agent?: AgentInfo) => void;
   agents?: AgentInfo[];
   placeholder?: string;
 }
@@ -39,13 +56,14 @@ export function AgentPicker({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const selected = agents.find((a) => a.id === value);
+  const selected = agents.find((a) => agentRefKey(a) === value);
   const filtered = agents.filter(
     (a) =>
       !search ||
       a.id.includes(search) ||
       a.name.includes(search) ||
-      a.identity_name.includes(search)
+      a.identity_name.includes(search) ||
+      (a.runtime || "").includes(search)
   );
 
   return (
@@ -57,6 +75,9 @@ export function AgentPicker({
       >
         {selected ? (
           <span>
+            <span className="mr-2 rounded bg-slate-700 px-1.5 py-0.5 text-[10px] uppercase text-slate-300">
+              {selected.runtime}
+            </span>
             {selected.identity_emoji} {selected.name}{" "}
             <span className="text-slate-500">({selected.id})</span>
           </span>
@@ -71,21 +92,24 @@ export function AgentPicker({
             autoFocus
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="搜索 Agent…"
+            placeholder="搜索 Agent / runtime…"
             className="w-full border-b border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none"
           />
           <ul className="max-h-48 overflow-y-auto">
             {filtered.map((a) => (
-              <li key={a.id}>
+              <li key={agentRefKey(a)}>
                 <button
                   type="button"
                   onClick={() => {
-                    onChange(a.id);
+                    onChange(agentRefKey(a), a);
                     setOpen(false);
                     setSearch("");
                   }}
                   className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm hover:bg-slate-800"
                 >
+                  <span className="w-14 shrink-0 text-[10px] uppercase text-slate-500">
+                    {a.runtime}
+                  </span>
                   <span>{a.identity_emoji || "🤖"}</span>
                   <span className="flex-1 truncate">{a.name}</span>
                   <span className="text-xs text-slate-500">{a.id}</span>

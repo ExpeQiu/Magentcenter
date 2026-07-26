@@ -3,6 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PORT="${PORT:-8013}"
 "$ROOT/scripts/stop-frontend.sh" 2>/dev/null || true
 
 PID_FILE="$ROOT/logs/agentcenter.pid"

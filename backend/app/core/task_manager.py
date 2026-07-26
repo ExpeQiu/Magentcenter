@@ -14,9 +14,9 @@ from app.config import Settings
 from app.core import projects as project_service
 from app.core import workspaces as workspace_service
 from app.core.agent_registry import AgentRegistry
-from app.core.mock_adapter import MockAdapter, MockEvent
-from app.core.openclaw_adapter import OpenClawAdapter, OpenClawEvent
+from app.core.runtime_event import RuntimeEvent
 from app.models.db import TaskEventRecord, TaskRecord, get_session_factory
+from app.models.runtime import agent_lock_key, normalize_runtime
 from app.models.schemas import CreateTaskRequest, TaskEvent, TaskInfo, TokenUsage, UpdateTaskRequest
 
 logger = logging.getLogger(__name__)
@@ -31,9 +31,6 @@ class TaskManager:
         self._event_queues: dict[str, asyncio.Queue[TaskEvent]] = defaultdict(asyncio.Queue)
         self._agent_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._semaphore = asyncio.Semaphore(settings.max_concurrent_tasks)
-        self._executor = (
-            MockAdapter() if settings.ai_mock_mode else OpenClawAdapter(settings)
-        )
 
     def _record_to_info(self, rec: TaskRecord) -> TaskInfo:
         usage = None
@@ -42,11 +39,13 @@ class TaskManager:
                 usage = TokenUsage(**json.loads(rec.usage_json))
             except (json.JSONDecodeError, TypeError):
                 pass
+        runtime = getattr(rec, "runtime", None) or "openclaw"
         return TaskInfo(
             id=rec.id,
             workspace_id=rec.workspace_id or "",
             project_id=rec.project_id or "",
             agent_id=rec.agent_id,
+            runtime=runtime,  # type: ignore[arg-type]
             prompt=rec.prompt,
             system_prompt=rec.system_prompt or "",
             status=rec.status,
@@ -94,10 +93,21 @@ class TaskManager:
         q = self._event_queues[task_id]
         await q.put(event)
 
+    def _resolve_runtime(self, req: CreateTaskRequest) -> str:
+        raw = req.runtime or self.settings.default_runtime
+        rt = normalize_runtime(raw, self.settings.default_runtime)
+        if not self.settings.is_runtime_enabled(rt):
+            raise ValueError(f"runtime not enabled: {rt}")
+        return rt
+
     async def create_task(self, req: CreateTaskRequest) -> TaskInfo:
-        agent = await self.registry.get_agent(req.agent_id)
+        runtime = self._resolve_runtime(req)
+        agent = await self.registry.get_agent(req.agent_id, runtime=runtime)
         if not agent:
-            raise ValueError(f"agent not found: {req.agent_id}")
+            raise ValueError(f"agent not found: {runtime}/{req.agent_id}")
+
+        # 固化 runtime，供 dispatch 使用
+        req = req.model_copy(update={"runtime": runtime})  # type: ignore[arg-type]
 
         task_id = str(uuid.uuid4())
         project_id = req.project_id or ""
@@ -125,6 +135,7 @@ class TaskManager:
                 workspace_id=workspace_id,
                 project_id=project_id,
                 agent_id=req.agent_id,
+                runtime=runtime,
                 prompt=req.prompt,
                 system_prompt=req.system_prompt or "",
                 status="queued",
@@ -138,8 +149,9 @@ class TaskManager:
             info = self._record_to_info(rec)
 
         logger.info(
-            "task created id=%s agent=%s project=%s workspace=%s",
+            "task created id=%s runtime=%s agent=%s project=%s workspace=%s",
             task_id,
+            runtime,
             req.agent_id,
             project_id or "-",
             workspace_id or "-",
@@ -150,9 +162,11 @@ class TaskManager:
         return info
 
     async def _dispatch(self, task_id: str, req: CreateTaskRequest) -> None:
+        runtime = req.runtime or self.settings.default_runtime
+        lock_key = agent_lock_key(runtime, req.agent_id)
         async with self._semaphore:
             if self.settings.agent_serial_execution:
-                async with self._agent_locks[req.agent_id]:
+                async with self._agent_locks[lock_key]:
                     await self._run_task(task_id, req)
             else:
                 await self._run_task(task_id, req)
@@ -162,7 +176,11 @@ class TaskManager:
         await self._update_task(task_id, status="running")
         await self._emit(task_id, TaskEvent(type="status", status="running"))
 
-        timeout = req.timeout or self.settings.openclaw_default_timeout
+        runtime = req.runtime or self.settings.default_runtime
+        if runtime == "hermes":
+            timeout = req.timeout or self.settings.hermes_default_timeout
+        else:
+            timeout = req.timeout or self.settings.openclaw_default_timeout
         session_id = req.resume_session_id or f"agentcenter-{uuid.uuid4().hex[:12]}"
         output_parts: list[str] = []
         final_status = "failed"
@@ -171,22 +189,14 @@ class TaskManager:
         duration_ms = 0
 
         try:
-            if self.settings.ai_mock_mode:
-                event_iter = self._executor.execute(
-                    req.agent_id,
-                    req.prompt,
-                    req.system_prompt,
-                    session_id,
-                    timeout,
-                )
-            else:
-                event_iter = self._executor.execute(
-                    req.agent_id,
-                    req.prompt,
-                    req.system_prompt,
-                    session_id,
-                    timeout,
-                )
+            executor = self.registry.get_executor(runtime)
+            event_iter = executor.execute(
+                req.agent_id,
+                req.prompt,
+                req.system_prompt,
+                session_id,
+                timeout,
+            )
 
             async for raw_event in event_iter:
                 if self._cancel_flags.get(task_id):
@@ -215,15 +225,16 @@ class TaskManager:
                 final_status = "completed"
 
         except Exception as e:
-            logger.exception("task %s failed", task_id)
+            logger.exception("task %s failed runtime=%s", task_id, runtime)
             final_status = "failed"
             final_error = str(e)
             await self._emit(task_id, TaskEvent(type="error", content=final_error))
 
+        output_text = "".join(output_parts)
         await self._update_task(
             task_id,
             status=final_status,
-            output="".join(output_parts),
+            output=output_text,
             error=final_error,
             session_id=session_id,
             usage_json=json.dumps(usage.model_dump()) if usage else "",
@@ -233,9 +244,28 @@ class TaskManager:
             task_id,
             TaskEvent(type="result", content=final_status, status=final_status),
         )
-        logger.info("task finished id=%s status=%s", task_id, final_status)
+        try:
+            from app.core.knowledge import upsert_from_task
 
-    def _normalize_event(self, raw: OpenClawEvent | MockEvent) -> TaskEvent:
+            await upsert_from_task(
+                task_id=task_id,
+                prompt=req.prompt or "",
+                output=output_text,
+                agent_id=req.agent_id or "",
+                runtime=runtime,
+                session_id=session_id,
+                status=final_status,
+            )
+        except Exception as e:
+            logger.warning("knowledge index failed task=%s: %s", task_id, e)
+        logger.info(
+            "task finished id=%s runtime=%s status=%s",
+            task_id,
+            runtime,
+            final_status,
+        )
+
+    def _normalize_event(self, raw: RuntimeEvent) -> TaskEvent:
         return TaskEvent(
             type=raw.type,
             content=getattr(raw, "content", "") or getattr(raw, "output", ""),
@@ -353,6 +383,7 @@ class TaskManager:
             agent_id=task.agent_id,
             prompt=task.prompt,
             system_prompt=task.system_prompt,
+            runtime=task.runtime,
             workspace_id=task.workspace_id or "",
             project_id=task.project_id or "",
             start_date=task.start_date or "",

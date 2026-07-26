@@ -8,10 +8,11 @@ import shutil
 import time
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from app.config import Settings
+from app.core.runtime_event import RuntimeEvent
 from app.models.schemas import AgentInfo, TokenUsage
 
 logger = logging.getLogger(__name__)
@@ -20,15 +21,8 @@ MIN_OPENCLAW_VERSION = "2026.5.5"
 VERSION_PATTERN = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 
 
-@dataclass
-class OpenClawEvent:
-    type: str
-    content: str = ""
-    tool: str = ""
-    call_id: str = ""
-    input: dict[str, Any] | None = None
-    output: str = ""
-    status: str = ""
+# 兼容旧命名；统一事件请用 RuntimeEvent
+OpenClawEvent = RuntimeEvent
 
 
 @dataclass
@@ -100,6 +94,7 @@ def _parse_agents_json(raw: bytes) -> list[AgentInfo] | None:
                 identity_name=e.get("identityName", ""),
                 identity_emoji=e.get("identityEmoji", ""),
                 is_default=bool(e.get("isDefault", False)),
+                runtime="openclaw",
             )
         )
     return agents

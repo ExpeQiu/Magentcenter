@@ -12,7 +12,7 @@ type ModalType = "create-task" | null;
 
 interface ModalContextValue {
   modal: ModalType;
-  openCreateTask: (agentId?: string, projectId?: string) => void;
+  openCreateTask: (agentRef?: string, projectId?: string) => void;
   closeModal: () => void;
   presetAgentId: string;
   presetProjectId: string;
@@ -25,8 +25,8 @@ export function ModalProvider({ children }: { children: ReactNode }) {
   const [presetAgentId, setPresetAgentId] = useState("");
   const [presetProjectId, setPresetProjectId] = useState("");
 
-  const openCreateTask = useCallback((agentId = "", projectId = "") => {
-    setPresetAgentId(agentId);
+  const openCreateTask = useCallback((agentRef = "", projectId = "") => {
+    setPresetAgentId(agentRef);
     setPresetProjectId(projectId);
     setModal("create-task");
   }, []);

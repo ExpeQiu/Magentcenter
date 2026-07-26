@@ -34,8 +34,11 @@ export function Sidebar({ healthLabel }: SidebarProps) {
     { href: wp.squads(), label: "小队", icon: "👥" },
     { href: wp.autopilots(), label: "Autopilot", icon: "⏱" },
     { href: wp.skills(), label: "技能", icon: "🛠" },
+    { href: wp.kanban(), label: "Kanban", icon: "📌" },
     { href: wp.system(), label: "系统", icon: "📡" },
     { href: wp.sessions(), label: "Sessions", icon: "💬" },
+    { href: wp.knowledge(), label: "知识库", icon: "📚" },
+    { href: wp.outputs(), label: "输出物", icon: "📄" },
   ];
 
   return (

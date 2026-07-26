@@ -65,6 +65,7 @@ class TaskRecord(Base):
     workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
     project_id: Mapped[str] = mapped_column(String(64), index=True, default="")
     agent_id: Mapped[str] = mapped_column(String(128), index=True)
+    runtime: Mapped[str] = mapped_column(String(32), index=True, default="openclaw")
     prompt: Mapped[str] = mapped_column(Text)
     system_prompt: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), index=True, default="queued")
@@ -104,8 +105,45 @@ class AutopilotRecord(Base):
     cron: Mapped[str] = mapped_column(String(64), default="3600")
     enabled: Mapped[bool] = mapped_column(Integer, default=1)
     openclaw_id: Mapped[str] = mapped_column(String(64), default="")
+    hermes_id: Mapped[str] = mapped_column(String(64), default="")
+    runtime: Mapped[str] = mapped_column(String(32), default="openclaw")
     last_run: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class AlertRecord(Base):
+    """持久化告警历史（Cron / Gateway / Disk）。"""
+
+    __tablename__ = "alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[str] = mapped_column(String(64), index=True, default="")
+    kind: Mapped[str] = mapped_column(String(32), index=True, default="cron")
+    count: Mapped[int] = mapped_column(Integer, default=0)
+    sent: Mapped[int] = mapped_column(Integer, default=0)
+    jobs_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class KnowledgeRecord(Base):
+    """任务/会话输出知识条目（关键词 + 哈希向量）。"""
+
+    __tablename__ = "knowledge_entries"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    source_type: Mapped[str] = mapped_column(String(32), index=True, default="task")
+    source_id: Mapped[str] = mapped_column(String(128), index=True, default="")
+    runtime: Mapped[str] = mapped_column(String(32), index=True, default="")
+    agent_id: Mapped[str] = mapped_column(String(128), index=True, default="")
+    session_id: Mapped[str] = mapped_column(String(128), index=True, default="")
+    title: Mapped[str] = mapped_column(String(256), default="")
+    content: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), default="")
+    embedding_json: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
 
 
 _engine = None
@@ -116,10 +154,14 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("tasks", "workspace_id", "VARCHAR(64) DEFAULT ''"),
     ("tasks", "start_date", "VARCHAR(16) DEFAULT ''"),
     ("tasks", "due_date", "VARCHAR(16) DEFAULT ''"),
+    ("tasks", "runtime", "VARCHAR(32) DEFAULT 'openclaw'"),
     ("projects", "workspace_id", "VARCHAR(64) DEFAULT ''"),
     ("projects", "lead_type", "VARCHAR(32) DEFAULT ''"),
     ("projects", "lead_id", "VARCHAR(128) DEFAULT ''"),
     ("projects", "resource_count", "INTEGER DEFAULT 0"),
+    ("autopilots", "hermes_id", "VARCHAR(64) DEFAULT ''"),
+    ("autopilots", "runtime", "VARCHAR(32) DEFAULT 'openclaw'"),
+    ("knowledge_entries", "embedding_json", "TEXT DEFAULT ''"),
 ]
 
 

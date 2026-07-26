@@ -1,15 +1,26 @@
 import type {
   AgentInfo,
   AgentStats,
+  AlertSettings,
   AutopilotInfo,
   HealthResponse,
+  InstallSkillResult,
+  EmbeddingStatus,
+  KnowledgeHit,
+  KanbanBoard,
+  KanbanTask,
+  OutputEntry,
+  OutputFile,
+  OutputStatus,
   ProjectInfo,
   ProjectResourceInfo,
   RecentAlert,
   SessionDetail,
   SessionInfo,
+  SkillDetail,
   SkillInfo,
   SquadInfo,
+  SwarmGraph,
   SystemStatus,
   TaskInfo,
   TaskListResponse,
@@ -59,6 +70,7 @@ export const api = {
   createTask: (data: {
     agent_id: string;
     prompt: string;
+    runtime?: "openclaw" | "hermes";
     system_prompt?: string;
     workspace_id?: string;
     project_id?: string;
@@ -144,37 +156,121 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ squad_id: squadId, prompt }),
     }),
-  skills: () => request<SkillInfo[]>("/api/skills"),
-  installSkill: (data: { url?: string; name?: string; instructions?: string }) =>
-    request<TaskInfo>("/api/skills/install", {
+  skills: (opts?: {
+    includeHidden?: boolean;
+    includeArchived?: boolean;
+    runtime?: "openclaw" | "hermes" | "all";
+  }) => {
+    const q = new URLSearchParams();
+    if (opts?.includeHidden) q.set("include_hidden", "true");
+    if (opts?.includeArchived) q.set("include_archived", "true");
+    if (opts?.runtime && opts.runtime !== "all") q.set("runtime", opts.runtime);
+    const qs = q.toString();
+    return request<SkillInfo[]>(`/api/skills${qs ? `?${qs}` : ""}`);
+  },
+  skillDetail: (skillId: string, runtime: "openclaw" | "hermes" = "openclaw") => {
+    const path = skillId.split("/").map(encodeURIComponent).join("/");
+    return request<SkillDetail>(`/api/skills/${path}?runtime=${runtime}`);
+  },
+  installSkill: (data: {
+    url?: string;
+    name?: string;
+    instructions?: string;
+    runtime?: "openclaw" | "hermes";
+    category?: string;
+    force?: boolean;
+  }) =>
+    request<InstallSkillResult>("/api/skills/install", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
     }),
+  alertSettings: () => request<AlertSettings>("/api/settings/alert"),
+  updateAlertSettings: (data: {
+    feishu_webhook_url?: string;
+    cron_alert_interval?: number;
+    cron_alert_enabled?: boolean;
+    gateway_alert_enabled?: boolean;
+    disk_alert_threshold?: number;
+    profile?: string;
+    activate?: boolean;
+  }) =>
+    request<{
+      updated: string[];
+      status: string;
+      persisted?: boolean;
+      profile?: string;
+      settings: AlertSettings;
+    }>("/api/settings/alert", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  alertProfiles: () =>
+    request<{ active: string; profiles: string[] }>("/api/settings/alert/profiles"),
+  createAlertProfile: (data: {
+    name: string;
+    from_current?: boolean;
+    activate?: boolean;
+  }) =>
+    request<{ status: string; active: string; profiles: string[]; settings: AlertSettings }>(
+      "/api/settings/alert/profiles",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      }
+    ),
+  activateAlertProfile: (name: string) =>
+    request<{ status: string; active: string; settings: AlertSettings }>(
+      `/api/settings/alert/profiles/${encodeURIComponent(name)}/activate`,
+      { method: "POST" }
+    ),
   auditSkill: (skillId: string) =>
     request<TaskInfo>("/api/skills/audit", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ skill_id: skillId }),
     }),
+  archiveSkill: (
+    skillId: string,
+    runtime: "openclaw" | "hermes" = "openclaw"
+  ) => {
+    const path = skillId.split("/").map(encodeURIComponent).join("/");
+    return request<SkillDetail>(`/api/skills/${path}/archive?runtime=${runtime}`, {
+      method: "POST",
+    });
+  },
   systemStatus: (refresh = false) =>
     request<SystemStatus>(`/api/system-status?refresh=${refresh}`),
+  repairCron: (cronId: string, data?: { note?: string; workspace_id?: string }) =>
+    request<TaskInfo>(`/api/cron/${encodeURIComponent(cronId)}/repair`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data || {}),
+    }),
   sessions: (limit = 50) =>
     request<SessionInfo[]>(`/api/sessions?limit=${limit}`),
   sessionDetail: (sessionId: string) =>
     request<SessionDetail>(`/api/sessions/${encodeURIComponent(sessionId)}`),
   recentAlerts: () =>
-    request<{ errors: unknown[]; recent_alerts: RecentAlert[] }>("/api/cron-alerts"),
-  autopilots: (includeOpenclaw = true) =>
+    request<{
+      errors: unknown[];
+      recent_alerts: RecentAlert[];
+      gateway_alerts?: RecentAlert[];
+    }>("/api/cron-alerts"),
+  autopilots: (includeOpenclaw = true, includeHermes = true) =>
     request<AutopilotInfo[]>(
-      `/api/autopilots?include_openclaw=${includeOpenclaw}`
+      `/api/autopilots?include_openclaw=${includeOpenclaw}&include_hermes=${includeHermes}`
     ),
   createAutopilot: (data: {
     name: string;
     agent_id: string;
     prompt: string;
     cron?: string;
+    runtime?: "openclaw" | "hermes";
     sync_to_openclaw?: boolean;
+    sync_to_hermes?: boolean;
   }) =>
     request<AutopilotInfo>("/api/autopilots", {
       method: "POST",
@@ -182,5 +278,97 @@ export const api = {
       body: JSON.stringify(data),
     }),
   triggerAutopilot: (id: string) =>
-    request<TaskInfo>(`/api/autopilots/${id}/trigger`, { method: "POST" }),
+    request<TaskInfo>(`/api/autopilots/${encodeURIComponent(id)}/trigger`, {
+      method: "POST",
+    }),
+  kanbanBoards: () => request<KanbanBoard[]>("/api/kanban/boards"),
+  kanbanTasks: (opts?: { status?: string; assignee?: string }) => {
+    const q = new URLSearchParams();
+    if (opts?.status) q.set("status", opts.status);
+    if (opts?.assignee) q.set("assignee", opts.assignee);
+    const qs = q.toString();
+    return request<KanbanTask[]>(`/api/kanban/tasks${qs ? `?${qs}` : ""}`);
+  },
+  createKanbanTask: (data: {
+    title: string;
+    body?: string;
+    assignee?: string;
+    priority?: number;
+    triage?: boolean;
+  }) =>
+    request<KanbanTask>("/api/kanban/tasks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  runKanbanTask: (id: string, data?: { prompt?: string; agent_id?: string }) =>
+    request<TaskInfo>(`/api/kanban/tasks/${encodeURIComponent(id)}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data || {}),
+    }),
+  createSwarm: (data: {
+    goal: string;
+    workers: string[];
+    verifier?: string;
+    synthesizer?: string;
+    priority?: number;
+    created_by?: string;
+  }) =>
+    request<SwarmGraph>("/api/kanban/swarm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  getSwarm: (rootId: string) =>
+    request<SwarmGraph>(`/api/kanban/swarm/${encodeURIComponent(rootId)}`),
+  knowledgeSearch: (
+    q: string,
+    opts?: { limit?: number; runtime?: string; mode?: "keyword" | "vector" | "hybrid" }
+  ) => {
+    const params = new URLSearchParams({ q });
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.runtime) params.set("runtime", opts.runtime);
+    if (opts?.mode) params.set("mode", opts.mode);
+    return request<KnowledgeHit[]>(`/api/knowledge/search?${params}`);
+  },
+  knowledgeStatus: () =>
+    request<{ status: string; embedding: EmbeddingStatus }>("/api/knowledge/status"),
+  knowledgeBackfill: (limit = 200) =>
+    request<{ indexed: number; status: string; embedding?: EmbeddingStatus }>(
+      `/api/knowledge/backfill?limit=${limit}`,
+      { method: "POST" }
+    ),
+  indexSession: (sessionId: string) =>
+    request<{ status: string; session_id: string; indexed: number; runtime?: string }>(
+      `/api/knowledge/index-session/${encodeURIComponent(sessionId)}`,
+      { method: "POST" }
+    ),
+  outputsStatus: () => request<OutputStatus>("/api/outputs/status"),
+  outputsTree: (path = "") => {
+    const params = new URLSearchParams();
+    if (path) params.set("path", path);
+    const qs = params.toString();
+    return request<OutputEntry[]>(`/api/outputs/tree${qs ? `?${qs}` : ""}`);
+  },
+  outputsRecent: (opts?: {
+    limit?: number;
+    source?: "openclaw" | "hermes";
+    q?: string;
+    since_hours?: number;
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.source) params.set("source", opts.source);
+    if (opts?.q) params.set("q", opts.q);
+    if (opts?.since_hours != null) {
+      params.set("since_hours", String(opts.since_hours));
+    }
+    const qs = params.toString();
+    return request<OutputEntry[]>(`/api/outputs/recent${qs ? `?${qs}` : ""}`);
+  },
+  outputsFile: (path: string) =>
+    request<OutputFile>(
+      `/api/outputs/file?path=${encodeURIComponent(path)}`
+    ),
 };

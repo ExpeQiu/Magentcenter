@@ -73,6 +73,9 @@ export function TaskDetailView() {
         <div>
           <h1 className="text-xl font-semibold">任务详情</h1>
           <div className="mt-2 flex flex-wrap gap-3 text-sm text-slate-400">
+            <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase text-slate-300">
+              {task.runtime || "openclaw"}
+            </span>
             <span>
               Agent: <code className="text-slate-200">{task.agent_id}</code>
             </span>

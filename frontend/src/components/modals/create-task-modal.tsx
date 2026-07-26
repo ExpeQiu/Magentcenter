@@ -5,7 +5,10 @@ import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useWorkspace, useWorkspacePaths } from "@/lib/context/workspace-context";
 import { useModal } from "@/lib/context/modal-context";
-import { AgentPicker } from "@/components/pickers/agent-picker";
+import {
+  AgentPicker,
+  parseAgentRef,
+} from "@/components/pickers/agent-picker";
 import { ProjectPicker } from "@/components/pickers/project-picker";
 
 export function CreateTaskModal() {
@@ -14,7 +17,7 @@ export function CreateTaskModal() {
   const { workspaceId } = useWorkspace();
   const wp = useWorkspacePaths();
   const router = useRouter();
-  const [agentId, setAgentId] = useState("");
+  const [agentRef, setAgentRef] = useState("");
   const [projectId, setProjectId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -23,7 +26,7 @@ export function CreateTaskModal() {
 
   useEffect(() => {
     if (modal === "create-task") {
-      setAgentId(presetAgentId);
+      setAgentRef(presetAgentId);
       setProjectId(presetProjectId);
     }
   }, [modal, presetAgentId, presetProjectId]);
@@ -38,11 +41,14 @@ export function CreateTaskModal() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!agentId || !prompt.trim()) return;
+    if (!agentRef || !prompt.trim()) return;
+    const { runtime, agentId } = parseAgentRef(agentRef);
+    if (!agentId) return;
     setSubmitting(true);
     try {
       const task = await api.createTask({
         agent_id: agentId,
+        runtime,
         prompt,
         workspace_id: workspaceId || undefined,
         project_id: projectId || undefined,
@@ -79,8 +85,10 @@ export function CreateTaskModal() {
             <ProjectPicker value={projectId} onChange={setProjectId} />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-slate-400">Agent</label>
-            <AgentPicker value={agentId} onChange={setAgentId} />
+            <label className="mb-1 block text-xs text-slate-400">
+              Agent（含 OpenClaw / Hermes）
+            </label>
+            <AgentPicker value={agentRef} onChange={(ref) => setAgentRef(ref)} />
           </div>
           <div>
             <label className="mb-1 block text-xs text-slate-400">任务描述</label>
@@ -122,7 +130,7 @@ export function CreateTaskModal() {
             </button>
             <button
               type="submit"
-              disabled={submitting || !agentId || !prompt.trim()}
+              disabled={submitting || !agentRef || !prompt.trim()}
               className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium hover:bg-indigo-500 disabled:opacity-50"
             >
               {submitting ? "提交中…" : "分配任务"}

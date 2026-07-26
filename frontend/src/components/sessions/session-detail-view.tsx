@@ -37,6 +37,8 @@ export function SessionDetailView() {
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [indexing, setIndexing] = useState(false);
+  const [indexMsg, setIndexMsg] = useState("");
 
   useEffect(() => {
     api
@@ -46,20 +48,41 @@ export function SessionDetailView() {
       .finally(() => setLoading(false));
   }, [sessionId]);
 
+  const indexToKnowledge = async () => {
+    setIndexing(true);
+    setIndexMsg("");
+    try {
+      const res = await api.indexSession(sessionId);
+      setIndexMsg(`已索引 ${res.indexed} 条消息到知识库`);
+    } catch (e) {
+      setIndexMsg(e instanceof Error ? e.message : "索引失败");
+    } finally {
+      setIndexing(false);
+    }
+  };
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={() => router.back()}
           className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
         >
           ← 返回
         </button>
-        <div>
+        <div className="flex-1">
           <h1 className="text-lg font-semibold">Session 详情</h1>
           <p className="font-mono text-xs text-slate-400">{sessionId}</p>
         </div>
+        <button
+          onClick={indexToKnowledge}
+          disabled={indexing || !detail?.messages?.length}
+          className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm hover:bg-indigo-500 disabled:opacity-50"
+        >
+          {indexing ? "索引中…" : "索引到知识库"}
+        </button>
       </div>
+      {indexMsg && <p className="text-xs text-slate-400">{indexMsg}</p>}
 
       {loading && <p className="text-slate-500">加载中…</p>}
       {error && (
@@ -71,6 +94,10 @@ export function SessionDetailView() {
       {detail && (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3">
+              <p className="text-xs text-slate-500">运行时</p>
+              <p className="mt-1 text-sm uppercase">{detail.runtime || "openclaw"}</p>
+            </div>
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3">
               <p className="text-xs text-slate-500">Agent</p>
               <p className="mt-1 font-mono text-sm">{detail.agent_id || "—"}</p>

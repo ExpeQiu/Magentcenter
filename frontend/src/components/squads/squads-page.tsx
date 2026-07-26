@@ -48,7 +48,7 @@ export function SquadsPage() {
     <>
       <PageHeader
         title="小队"
-        description="由 Leader Agent 路由的小队任务分配"
+        description="OpenClaw Leader 路由 / Hermes profile 执行"
       />
       {loading ? (
         <p className="text-slate-500">加载中…</p>
@@ -71,6 +71,9 @@ export function SquadsPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <h3 className="font-semibold truncate">{s.name}</h3>
+                      <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase text-slate-400">
+                        {s.runtime || "openclaw"}
+                      </span>
                       {isOpen && (
                         <span className="rounded bg-indigo-500/20 px-2 py-0.5 text-xs text-indigo-300">
                           展开中

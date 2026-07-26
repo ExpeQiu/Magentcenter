@@ -7,24 +7,34 @@ import type { AutopilotInfo } from "@/lib/types";
 import { useWorkspacePaths } from "@/lib/context/workspace-context";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
-import { AgentPicker } from "@/components/pickers/agent-picker";
+import {
+  AgentPicker,
+  parseAgentRef,
+} from "@/components/pickers/agent-picker";
 import { StatusBadge, formatTime } from "@/components/ui/status-badge";
+
+function sourceLabel(a: AutopilotInfo) {
+  if (a.source === "hermes" || a.id.startsWith("hermes:")) return "Hermes";
+  if (a.source === "openclaw" || a.id.startsWith("openclaw:")) return "OpenClaw";
+  if (a.source === "bidirectional") return "双向";
+  return "本地";
+}
 
 export function AutopilotsPage() {
   const [items, setItems] = useState<AutopilotInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
-  const [agentId, setAgentId] = useState("");
+  const [agentRef, setAgentRef] = useState("");
   const [prompt, setPrompt] = useState("");
   const [cron, setCron] = useState("3600");
-  const [syncOpenclaw, setSyncOpenclaw] = useState(false);
+  const [syncExternal, setSyncExternal] = useState(false);
   const router = useRouter();
   const wp = useWorkspacePaths();
 
   const load = () =>
     api
-      .autopilots(true)
+      .autopilots(true, true)
       .then(setItems)
       .catch(console.error)
       .finally(() => setLoading(false));
@@ -35,17 +45,22 @@ export function AutopilotsPage() {
 
   const create = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!agentRef) return;
+    const { runtime, agentId } = parseAgentRef(agentRef);
     try {
       await api.createAutopilot({
         name,
         agent_id: agentId,
+        runtime,
         prompt,
         cron,
-        sync_to_openclaw: syncOpenclaw,
+        sync_to_openclaw: syncExternal && runtime === "openclaw",
+        sync_to_hermes: syncExternal && runtime === "hermes",
       });
       setShowForm(false);
       setName("");
       setPrompt("");
+      setAgentRef("");
       load();
     } catch {
       alert("创建失败");
@@ -55,11 +70,11 @@ export function AutopilotsPage() {
   const trigger = async (id: string) => {
     try {
       const task = await api.triggerAutopilot(id);
-      if (!id.startsWith("openclaw:")) {
-        router.push(wp.taskDetail(task.id));
-      } else {
-        alert("OpenClaw Cron 已触发");
+      if (id.startsWith("openclaw:") || id.startsWith("hermes:")) {
+        alert(`${id.startsWith("hermes:") ? "Hermes" : "OpenClaw"} Cron 已触发`);
         load();
+      } else {
+        router.push(wp.taskDetail(task.id));
       }
     } catch {
       alert("触发失败");
@@ -70,7 +85,7 @@ export function AutopilotsPage() {
     <>
       <PageHeader
         title="Autopilot"
-        description="本地定时 + OpenClaw Cron 镜像"
+        description="本地定时 + OpenClaw / Hermes Cron 聚合"
         actions={
           <button
             onClick={() => setShowForm(!showForm)}
@@ -91,7 +106,7 @@ export function AutopilotsPage() {
             placeholder="名称"
             className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
           />
-          <AgentPicker value={agentId} onChange={setAgentId} />
+          <AgentPicker value={agentRef} onChange={(ref) => setAgentRef(ref)} />
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
@@ -108,10 +123,10 @@ export function AutopilotsPage() {
           <label className="flex items-center gap-2 text-sm text-slate-400">
             <input
               type="checkbox"
-              checked={syncOpenclaw}
-              onChange={(e) => setSyncOpenclaw(e.target.checked)}
+              checked={syncExternal}
+              onChange={(e) => setSyncExternal(e.target.checked)}
             />
-            同步到 OpenClaw Cron
+            同步到所选运行时的外部 Cron（OpenClaw / Hermes）
           </label>
           <button type="submit" className="rounded-lg bg-indigo-600 px-4 py-2 text-sm">
             创建
@@ -128,6 +143,7 @@ export function AutopilotsPage() {
             <thead>
               <tr className="border-b border-slate-800 bg-slate-900/80 text-left text-xs text-slate-400">
                 <th className="px-4 py-3">名称</th>
+                <th className="px-4 py-3">运行时</th>
                 <th className="px-4 py-3">来源</th>
                 <th className="px-4 py-3">Agent</th>
                 <th className="px-4 py-3">调度</th>
@@ -140,9 +156,10 @@ export function AutopilotsPage() {
               {items.map((a) => (
                 <tr key={a.id} className="border-t border-slate-800/80">
                   <td className="px-4 py-3">{a.name}</td>
-                  <td className="px-4 py-3 text-xs text-slate-500">
-                    {a.source === "openclaw" ? "OpenClaw" : "本地"}
+                  <td className="px-4 py-3 text-xs uppercase text-slate-500">
+                    {a.runtime || (a.id.startsWith("hermes:") ? "hermes" : "openclaw")}
                   </td>
+                  <td className="px-4 py-3 text-xs text-slate-500">{sourceLabel(a)}</td>
                   <td className="px-4 py-3 font-mono text-xs">{a.agent_id}</td>
                   <td className="px-4 py-3 text-slate-400">{a.schedule || a.cron}</td>
                   <td className="px-4 py-3">

@@ -21,6 +21,7 @@ class AgentInfo(BaseModel):
     identity_name: str = ""
     identity_emoji: str = ""
     is_default: bool = False
+    runtime: Literal["openclaw", "hermes"] = "openclaw"
 
 
 class AgentStats(BaseModel):
@@ -28,12 +29,23 @@ class AgentStats(BaseModel):
     task_count: int = 0
     running_count: int = 0
     last_active_at: datetime | None = None
+    runtime: str = ""
+
+
+class RuntimeHealth(BaseModel):
+    runtime: str
+    available: bool = False
+    version: str = ""
 
 
 class HealthResponse(BaseModel):
     status: str
     openclaw_available: bool
     openclaw_version: str = ""
+    hermes_available: bool = False
+    hermes_version: str = ""
+    runtimes: list[RuntimeHealth] = Field(default_factory=list)
+    default_runtime: str = "openclaw"
     mock_mode: bool
 
 
@@ -94,6 +106,7 @@ class CreateTaskRequest(BaseModel):
     agent_id: str
     prompt: str
     system_prompt: str = ""
+    runtime: Literal["openclaw", "hermes"] | None = None
     workspace_id: str = ""
     project_id: str = ""
     start_date: str = ""
@@ -137,6 +150,7 @@ class TaskInfo(BaseModel):
     workspace_id: str = ""
     project_id: str = ""
     agent_id: str
+    runtime: Literal["openclaw", "hermes"] = "openclaw"
     prompt: str
     system_prompt: str = ""
     status: str
@@ -173,6 +187,20 @@ class InstallSkillRequest(BaseModel):
     url: str = ""
     name: str = ""
     instructions: str = ""
+    runtime: Literal["openclaw", "hermes"] = "openclaw"
+    category: str = ""
+    force: bool = False
+
+
+class InstallSkillResult(BaseModel):
+    """技能安装结果：OpenClaw 走 skill-agent 任务；Hermes 直调 CLI。"""
+
+    runtime: Literal["openclaw", "hermes"]
+    status: str  # queued | completed | failed
+    identifier: str = ""
+    message: str = ""
+    task_id: str = ""
+    task: TaskInfo | None = None
 
 
 class AuditSkillRequest(BaseModel):
@@ -185,4 +213,6 @@ class CreateAutopilotRequest(BaseModel):
     prompt: str
     cron: str = "3600"
     enabled: bool = True
+    runtime: Literal["openclaw", "hermes"] = "openclaw"
     sync_to_openclaw: bool = False
+    sync_to_hermes: bool = False

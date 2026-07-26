@@ -11,12 +11,28 @@ LOG_FILE="$ROOT/logs/agentcenter.log"
 cd "$ROOT"
 mkdir -p logs data
 
+# 已导出的环境变量优先于 .env（便于 verify 强制 AI_MOCK_MODE=true）
+_PRESERVE_AI_MOCK_MODE="${AI_MOCK_MODE-__UNSET__}"
+_PRESERVE_RUNTIMES="${RUNTIMES-__UNSET__}"
+_PRESERVE_DEFAULT_RUNTIME="${DEFAULT_RUNTIME-__UNSET__}"
+
 if [[ -f "$ROOT/.env" ]]; then
   set -a
   # shellcheck disable=SC1091
   source "$ROOT/.env"
   set +a
 fi
+
+if [[ "$_PRESERVE_AI_MOCK_MODE" != "__UNSET__" ]]; then
+  export AI_MOCK_MODE="$_PRESERVE_AI_MOCK_MODE"
+fi
+if [[ "$_PRESERVE_RUNTIMES" != "__UNSET__" ]]; then
+  export RUNTIMES="$_PRESERVE_RUNTIMES"
+fi
+if [[ "$_PRESERVE_DEFAULT_RUNTIME" != "__UNSET__" ]]; then
+  export DEFAULT_RUNTIME="$_PRESERVE_DEFAULT_RUNTIME"
+fi
+unset _PRESERVE_AI_MOCK_MODE _PRESERVE_RUNTIMES _PRESERVE_DEFAULT_RUNTIME
 
 if [[ ! -d "$VENV" ]]; then
   echo "[start] 创建 Python 虚拟环境..."

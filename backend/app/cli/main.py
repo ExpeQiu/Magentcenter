@@ -33,6 +33,7 @@ def _emit(data: Any, *, as_json: bool, table_fn=None) -> None:
             rows,
             [
                 ("id", "ID"),
+                ("runtime", "RUNTIME"),
                 ("agent", "AGENT"),
                 ("status", "STATUS"),
                 ("prompt", "PROMPT"),
@@ -51,8 +52,14 @@ def cmd_health(args: argparse.Namespace) -> int:
     else:
         mock = "mock" if data.get("mock_mode") else "live"
         oc = "ok" if data.get("openclaw_available") else "unavailable"
-        ver = data.get("openclaw_version") or "-"
-        print(f"status={data.get('status')} mode={mock} openclaw={oc} version={ver}")
+        hm = "ok" if data.get("hermes_available") else "unavailable"
+        oc_ver = data.get("openclaw_version") or "-"
+        hm_ver = data.get("hermes_version") or "-"
+        print(
+            f"status={data.get('status')} mode={mock} "
+            f"openclaw={oc}/{oc_ver} hermes={hm}/{hm_ver} "
+            f"default={data.get('default_runtime', 'openclaw')}"
+        )
     return 0
 
 
@@ -64,6 +71,7 @@ def cmd_agents(args: argparse.Namespace) -> int:
             [format_agent_row(a) for a in data] if not args.json else data,
             as_json=args.json,
             table_fn=[
+                ("runtime", "RUNTIME"),
                 ("id", "ID"),
                 ("name", "NAME"),
                 ("model", "MODEL"),
@@ -103,6 +111,8 @@ def cmd_tasks(args: argparse.Namespace) -> int:
             "agent_id": args.agent_id,
             "prompt": args.prompt,
         }
+        if getattr(args, "runtime", None):
+            body["runtime"] = args.runtime
         if args.system_prompt:
             body["system_prompt"] = args.system_prompt
         if args.workspace:
@@ -324,6 +334,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_tasks_run = tasks_sub.add_parser("run", help="创建并执行任务")
     p_tasks_run.add_argument("agent_id")
     p_tasks_run.add_argument("prompt")
+    p_tasks_run.add_argument(
+        "--runtime",
+        choices=["openclaw", "hermes"],
+        default=None,
+        help="运行时（默认取服务 DEFAULT_RUNTIME）",
+    )
     p_tasks_run.add_argument("--system-prompt", default="")
     p_tasks_run.add_argument("--workspace", default="")
     p_tasks_run.add_argument("--project", default="")

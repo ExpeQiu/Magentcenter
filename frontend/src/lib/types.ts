@@ -5,6 +5,8 @@ export interface AgentStats {
   last_active_at: string | null;
 }
 
+export type RuntimeName = "openclaw" | "hermes";
+
 export interface AgentInfo {
   id: string;
   name: string;
@@ -13,6 +15,7 @@ export interface AgentInfo {
   identity_name: string;
   identity_emoji: string;
   is_default: boolean;
+  runtime: RuntimeName;
 }
 
 export interface WorkspaceInfo {
@@ -29,6 +32,7 @@ export interface TaskInfo {
   workspace_id: string;
   project_id: string;
   agent_id: string;
+  runtime: RuntimeName;
   prompt: string;
   system_prompt: string;
   status: string;
@@ -55,6 +59,7 @@ export interface SquadInfo {
   leader: string;
   members: string[];
   description: string;
+  runtime?: RuntimeName;
 }
 
 export interface SkillInfo {
@@ -62,6 +67,130 @@ export interface SkillInfo {
   name: string;
   path: string;
   description: string;
+  description_full?: string;
+  version?: string;
+  owner?: string;
+  disable_model_invocation?: boolean;
+  allowed_tools?: string[];
+  emoji?: string;
+  archived?: boolean;
+  runtime?: RuntimeName | string;
+}
+
+export interface KanbanBoard {
+  slug: string;
+  name: string;
+  current: boolean;
+  counts: string;
+}
+
+export interface KanbanTask {
+  id: string;
+  title: string;
+  body: string;
+  assignee: string;
+  status: string;
+  priority: number;
+  workspace_kind?: string;
+  created_at?: number | null;
+  skills?: string[];
+  runtime?: string;
+}
+
+export interface SwarmNode {
+  id: string;
+  role: "root" | "worker" | "verifier" | "synthesizer" | string;
+  title: string;
+  assignee: string;
+  status: string;
+}
+
+export interface SwarmEdge {
+  from_id: string;
+  to_id: string;
+}
+
+export interface SwarmGraph {
+  root_id: string;
+  goal: string;
+  worker_ids: string[];
+  verifier_id: string;
+  synthesizer_id: string;
+  nodes: SwarmNode[];
+  edges: SwarmEdge[];
+}
+
+export interface InstallSkillResult {
+  runtime: RuntimeName;
+  status: string;
+  identifier: string;
+  message: string;
+  task_id: string;
+  task: TaskInfo | null;
+}
+
+export interface AlertSettings {
+  webhook_url_set: boolean;
+  webhook_url_masked: string;
+  cron_alert_interval: number;
+  cron_alert_enabled: boolean;
+  gateway_alert_enabled: boolean;
+  disk_alert_threshold: number;
+  persisted?: boolean;
+  profile?: string;
+  profiles?: string[];
+}
+
+export interface EmbeddingStatus {
+  provider: string;
+  model: string;
+  api_url_set?: boolean;
+  dim?: number | null;
+  mock?: boolean;
+}
+
+export interface KnowledgeHit {
+  id: string;
+  source_type: string;
+  source_id: string;
+  runtime: string;
+  agent_id: string;
+  session_id: string;
+  title: string;
+  snippet: string;
+  status: string;
+  score: number;
+  created_at: string;
+}
+
+export interface OutputEntry {
+  name: string;
+  path: string;
+  kind: "dir" | "file" | string;
+  source: "openclaw" | "hermes" | string;
+  mtime: string;
+  size: number;
+}
+
+export interface OutputFile {
+  path: string;
+  name: string;
+  source: string;
+  mtime: string;
+  size: number;
+  content: string;
+}
+
+export interface OutputStatus {
+  status: string;
+  readable: boolean;
+  root_name: string;
+  message: string;
+}
+
+export interface SkillDetail extends SkillInfo {
+  body_preview: string;
+  skill_md_path: string;
 }
 
 export interface GithubRepoRef {
@@ -112,6 +241,8 @@ export interface AutopilotInfo {
   created_at: string;
   source?: string;
   openclaw_id?: string;
+  hermes_id?: string;
+  runtime?: RuntimeName | string;
   status?: string;
   schedule?: string;
 }
@@ -136,6 +267,7 @@ export interface CronJobInfo {
   last_run: string;
   last_status: string;
   source: string;
+  runtime?: RuntimeName | string;
 }
 
 export interface SessionMessage {
@@ -152,6 +284,7 @@ export interface SessionDetail {
   updated_at: string;
   total_tokens: number;
   messages: SessionMessage[];
+  runtime?: RuntimeName | string;
 }
 
 export interface SessionInfo {
@@ -163,6 +296,14 @@ export interface SessionInfo {
   age_ms: number;
   total_tokens: number;
   kind: string;
+  runtime?: RuntimeName | string;
+}
+
+export interface RuntimePane {
+  runtime: RuntimeName | string;
+  available: boolean;
+  version: string;
+  gateway: GatewayStatus;
 }
 
 export interface RecentAlert {
@@ -170,10 +311,12 @@ export interface RecentAlert {
   count: number;
   sent: boolean;
   jobs: string[];
+  kind?: "cron" | "gateway" | string;
 }
 
 export interface SystemStatus {
   gateway: GatewayStatus;
+  runtimes?: RuntimePane[];
   cron_jobs: CronJobInfo[];
   cron_errors: CronJobInfo[];
   sessions_count: number;
@@ -185,6 +328,9 @@ export interface HealthResponse {
   status: string;
   openclaw_available: boolean;
   openclaw_version: string;
+  hermes_available?: boolean;
+  hermes_version?: string;
+  default_runtime?: RuntimeName | string;
   mock_mode: boolean;
 }
 
