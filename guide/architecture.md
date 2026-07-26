@@ -68,9 +68,11 @@
 
 ### 输出物（Outputs）
 
-- 控制台页 `/{workspace}/outputs`：只读浏览 Obsidian vault（默认 `…/expe/openclaw`）
+- 控制台页 `/{workspace}/outputs`：只读索引 Obsidian `expe` 库（默认 `…/Documents/expe`）；「定义范围」从一级目录（Document / Github / openclaw 等）逐级勾选
+- 列表：全部普通文件；跳过 `.obsidian` / `.git` 等系统目录
+- 预览：Markdown 渲染；其它文本原文；二进制仅展示元信息
 - API：`GET /api/outputs/{status,tree,recent,file}`；路径逃逸拒绝
-- 来源标签：`HermesCenter/**` → hermes，其余业务文档 → openclaw
+- 来源标签：`HermesCenter/**` → hermes，其余 → openclaw
 - 与知识库（SQLite 检索）并列，不合并
 
 ## 分期路线

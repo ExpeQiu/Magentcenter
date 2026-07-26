@@ -6,6 +6,11 @@ import type { OutputEntry, OutputFile, OutputStatus } from "@/lib/types";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { MarkdownPreview } from "@/components/outputs/markdown-preview";
+import { HtmlPreview } from "@/components/outputs/html-preview";
+import {
+  loadScopes,
+  ScopeModal,
+} from "@/components/outputs/scope-modal";
 
 type ViewMode = "recent" | "tree";
 type SourceFilter = "all" | "openclaw" | "hermes";
@@ -41,6 +46,62 @@ function withinHours(iso: string, hours: number): boolean {
   return t >= Date.now() - hours * 3600 * 1000;
 }
 
+function fileIcon(e: OutputEntry): string {
+  if (e.kind === "dir") return "📁";
+  const ext = (e.ext || e.name.split(".").pop() || "").toLowerCase();
+  if (ext === "md" || ext === "markdown") return "📄";
+  if (ext === "html" || ext === "htm") return "🌐";
+  if (["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "🖼";
+  if (["json", "yml", "yaml", "toml"].includes(ext)) return "⚙";
+  if (["py", "ts", "tsx", "js", "sh"].includes(ext)) return "💻";
+  return "📎";
+}
+
+function isMarkdown(file: OutputFile): boolean {
+  const ext = (file.ext || "").toLowerCase();
+  return ext === "md" || ext === "markdown" || file.name.toLowerCase().endsWith(".md");
+}
+
+function isHtml(file: OutputFile): boolean {
+  const ext = (file.ext || "").toLowerCase();
+  if (ext === "html" || ext === "htm") return true;
+  const head = (file.content || "").trimStart().slice(0, 200).toLowerCase();
+  return (
+    head.startsWith("<!doctype html") ||
+    head.startsWith("<html") ||
+    head.includes("<html ")
+  );
+}
+
+function parentPath(path: string): string {
+  const i = path.lastIndexOf("/");
+  return i > 0 ? path.slice(0, i) : "";
+}
+
+function pathInScopes(path: string, scopes: string[]): boolean {
+  if (!scopes.length) return true;
+  const normalized = path.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+  return scopes.some(
+    (s) => normalized === s || normalized.startsWith(`${s}/`)
+  );
+}
+
+function scopeRootEntries(scopes: string[]): OutputEntry[] {
+  return scopes.map((path) => {
+    const name = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
+    const parts = path.split("/").filter(Boolean);
+    return {
+      name,
+      path,
+      kind: "dir" as const,
+      source: parts.includes("HermesCenter") ? "hermes" : "openclaw",
+      mtime: "",
+      size: 0,
+      ext: "",
+    };
+  });
+}
+
 export function OutputsPage() {
   const [status, setStatus] = useState<OutputStatus | null>(null);
   const [view, setView] = useState<ViewMode>("recent");
@@ -54,6 +115,12 @@ export function OutputsPage() {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [file, setFile] = useState<OutputFile | null>(null);
   const [fileLoading, setFileLoading] = useState(false);
+  const [scopes, setScopes] = useState<string[]>([]);
+  const [scopeOpen, setScopeOpen] = useState(false);
+
+  useEffect(() => {
+    setScopes(loadScopes());
+  }, []);
 
   const crumbs = useMemo(() => {
     if (!dirPath) return [] as { label: string; path: string }[];
@@ -93,14 +160,36 @@ export function OutputsPage() {
           source: source === "all" ? undefined : source,
           q: q.trim() || undefined,
           since_hours: timeRange,
+          scopes: scopes.length ? scopes : undefined,
         });
         setEntries(res);
         const label =
           TIME_RANGE_OPTIONS.find((o) => o.value === timeRange)?.label || "";
-        setMsg(res.length ? `${label} ${res.length} 篇` : `${label}无匹配文档`);
+        const scopeHint = scopes.length ? ` · 范围 ${scopes.length}` : "";
+        setMsg(
+          res.length
+            ? `${label} ${res.length} 篇${scopeHint}`
+            : `${label}无匹配文档${scopeHint}`
+        );
+      } else if (!dirPath && scopes.length) {
+        const roots = scopeRootEntries(scopes);
+        const byName = q.trim()
+          ? roots.filter((e) =>
+              e.name.toLowerCase().includes(q.trim().toLowerCase())
+            )
+          : roots;
+        setEntries(byName);
+        setMsg(`范围根目录 ${byName.length} 项`);
       } else {
+        if (scopes.length && dirPath && !pathInScopes(dirPath, scopes)) {
+          setDirPath("");
+          setEntries([]);
+          setMsg("当前目录不在范围内，已回到范围根");
+          return;
+        }
         const res = await api.outputsTree(dirPath);
         const filtered = res.filter((e) => {
+          if (scopes.length && !pathInScopes(e.path, scopes)) return false;
           if (e.kind === "dir") return true;
           if (source !== "all" && e.source !== source) return false;
           if (!withinHours(e.mtime, timeRange)) return false;
@@ -121,7 +210,7 @@ export function OutputsPage() {
     } finally {
       setLoading(false);
     }
-  }, [status, view, source, timeRange, q, dirPath]);
+  }, [status, view, source, timeRange, q, dirPath, scopes]);
 
   useEffect(() => {
     void loadList();
@@ -134,9 +223,10 @@ export function OutputsPage() {
       const f = await api.outputsFile(path);
       setFile(f);
     } catch (err) {
-      console.error(err);
+      const detail = err instanceof Error ? err.message : "读取文件失败";
+      console.error("[outputs] openFile failed", { path, detail, err });
       setFile(null);
-      setMsg("读取文件失败");
+      setMsg(detail.includes("不存在") ? `文件不存在：${path}` : detail);
     } finally {
       setFileLoading(false);
     }
@@ -165,7 +255,7 @@ export function OutputsPage() {
           title="Vault 不可读"
           description={
             status.message ||
-            "请在 .env 配置 OUTPUTS_VAULT_ROOT 指向 Obsidian openclaw 目录"
+            "请在 .env 配置 OUTPUTS_VAULT_ROOT 指向 Obsidian expe 目录"
           }
         />
       </>
@@ -178,14 +268,42 @@ export function OutputsPage() {
         title="输出物"
         description={vaultLabel}
         actions={
-          <button
-            type="button"
-            onClick={() => void loadList()}
-            className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
-          >
-            刷新
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => void loadList()}
+              className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
+            >
+              刷新
+            </button>
+            <button
+              type="button"
+              onClick={() => setScopeOpen(true)}
+              className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
+              title={
+                scopes.length
+                  ? `已选 ${scopes.length} 个目录`
+                  : "限定 Obsidian 文件夹范围"
+              }
+            >
+              定义范围
+              {scopes.length > 0 ? ` (${scopes.length})` : ""}
+            </button>
+          </>
         }
+      />
+
+      <ScopeModal
+        open={scopeOpen}
+        initialScopes={scopes}
+        onClose={() => setScopeOpen(false)}
+        onSave={(next) => {
+          setScopes(next);
+          setDirPath("");
+          setSelectedPath(null);
+          setFile(null);
+          console.info("[outputs] scopes updated", next);
+        }}
       />
 
       <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-slate-800 bg-slate-900/50 p-3">
@@ -293,18 +411,26 @@ export function OutputsPage() {
                     >
                       <span className="flex items-center gap-2">
                         <span className="shrink-0 text-slate-500">
-                          {e.kind === "dir" ? "📁" : "📄"}
+                          {fileIcon(e)}
                         </span>
                         <span className="truncate text-slate-200">{e.name}</span>
                       </span>
-                      <span className="flex flex-wrap gap-2 pl-6 text-[11px] text-slate-500">
-                        <span className="uppercase">{e.source}</span>
-                        {e.kind === "file" && (
-                          <>
-                            <span>{formatMtime(e.mtime)}</span>
-                            <span>{formatSize(e.size)}</span>
-                          </>
+                      <span className="flex flex-col gap-0.5 pl-6 text-[11px] text-slate-500">
+                        {e.kind === "file" && parentPath(e.path) && (
+                          <span className="truncate text-slate-600">
+                            {parentPath(e.path)}
+                          </span>
                         )}
+                        <span className="flex flex-wrap gap-2">
+                          <span className="uppercase">{e.source}</span>
+                          {e.ext && <span>.{e.ext}</span>}
+                          {e.kind === "file" && (
+                            <>
+                              <span>{formatMtime(e.mtime)}</span>
+                              <span>{formatSize(e.size)}</span>
+                            </>
+                          )}
+                        </span>
                       </span>
                     </button>
                   </li>
@@ -318,8 +444,12 @@ export function OutputsPage() {
           {!selectedPath ? (
             <div className="flex flex-1 items-center justify-center p-6">
               <EmptyState
-                title="选择文档预览"
-                description="从左侧打开 Markdown 输出物"
+                title="选择文件预览"
+                description={
+                  scopes.length
+                    ? `当前范围：${scopes.join(" · ")}`
+                    : "索引覆盖整个 expe 库（Document / Github / openclaw 等）"
+                }
               />
             </div>
           ) : fileLoading ? (
@@ -344,7 +474,22 @@ export function OutputsPage() {
                   {formatSize(file.size)}
                 </p>
               </div>
-              <MarkdownPreview content={file.content} />
+              {file.previewable === false ? (
+                <div className="flex flex-1 items-center justify-center p-6">
+                  <EmptyState
+                    title="二进制文件，无法预览"
+                    description={`${file.path} · ${formatSize(file.size)}`}
+                  />
+                </div>
+              ) : isHtml(file) ? (
+                <HtmlPreview content={file.content} title={file.name} />
+              ) : isMarkdown(file) ? (
+                <MarkdownPreview content={file.content} />
+              ) : (
+                <pre className="min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words p-5 font-mono text-xs leading-relaxed text-slate-300">
+                  {file.content}
+                </pre>
+              )}
             </div>
           )}
         </div>

@@ -170,6 +170,7 @@ export interface OutputEntry {
   source: "openclaw" | "hermes" | string;
   mtime: string;
   size: number;
+  ext?: string;
 }
 
 export interface OutputFile {
@@ -179,6 +180,8 @@ export interface OutputFile {
   mtime: string;
   size: number;
   content: string;
+  ext?: string;
+  previewable?: boolean;
 }
 
 export interface OutputStatus {

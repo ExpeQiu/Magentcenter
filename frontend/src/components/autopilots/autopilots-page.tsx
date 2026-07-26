@@ -12,6 +12,9 @@ import {
   parseAgentRef,
 } from "@/components/pickers/agent-picker";
 import { StatusBadge, formatTime } from "@/components/ui/status-badge";
+import { TimelineView } from "@/components/autopilots/timeline-view";
+
+type ViewMode = "list" | "timeline";
 
 function sourceLabel(a: AutopilotInfo) {
   if (a.source === "hermes" || a.id.startsWith("hermes:")) return "Hermes";
@@ -23,6 +26,7 @@ function sourceLabel(a: AutopilotInfo) {
 export function AutopilotsPage() {
   const [items, setItems] = useState<AutopilotInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [view, setView] = useState<ViewMode>("list");
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
   const [agentRef, setAgentRef] = useState("");
@@ -87,12 +91,38 @@ export function AutopilotsPage() {
         title="Autopilot"
         description="本地定时 + OpenClaw / Hermes Cron 聚合"
         actions={
-          <button
-            onClick={() => setShowForm(!showForm)}
-            className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm hover:bg-indigo-500"
-          >
-            + 新建
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg border border-slate-700 p-0.5 text-sm">
+              <button
+                type="button"
+                onClick={() => setView("list")}
+                className={`rounded-md px-3 py-1.5 ${
+                  view === "list"
+                    ? "bg-indigo-500/20 text-indigo-200"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                列表
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("timeline")}
+                className={`rounded-md px-3 py-1.5 ${
+                  view === "timeline"
+                    ? "bg-indigo-500/20 text-indigo-200"
+                    : "text-slate-400 hover:text-slate-200"
+                }`}
+              >
+                时间轴
+              </button>
+            </div>
+            <button
+              onClick={() => setShowForm(!showForm)}
+              className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm hover:bg-indigo-500"
+            >
+              + 新建
+            </button>
+          </div>
         }
       />
       {showForm && (
@@ -137,6 +167,8 @@ export function AutopilotsPage() {
         <p className="text-slate-500">加载中…</p>
       ) : items.length === 0 ? (
         <EmptyState title="暂无 Autopilot" description="创建定时任务自动巡检" />
+      ) : view === "timeline" ? (
+        <TimelineView items={items} onTrigger={trigger} />
       ) : (
         <div className="overflow-hidden rounded-xl border border-slate-800">
           <table className="w-full text-sm">

@@ -57,10 +57,10 @@ class Settings(BaseSettings):
     skills_dir: str = ""
     hermes_skills_dir: str = ""
 
-    # OpenClaw / Hermes 业务文档 vault（只读浏览）
+    # Obsidian expe 库根（只读浏览；范围选择从一级目录起逐级下钻）
     outputs_vault_root: str = (
         "/Users/expeqiu/Library/Mobile Documents/"
-        "iCloud~md~obsidian/Documents/expe/openclaw"
+        "iCloud~md~obsidian/Documents/expe"
     )
 
     # System 页 Cron 修复派单目标 Agent（可回退 ops / main）

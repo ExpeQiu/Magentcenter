@@ -1,4 +1,4 @@
-"""输出物 vault 只读 API。"""
+"""输出物 vault 只读 API（整库索引）。"""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from app.core.outputs_vault import (
     VaultEntry,
     list_dir,
     list_recent,
+    normalize_scopes,
     read_file,
     vault_status,
 )
@@ -29,6 +30,7 @@ class OutputEntryOut(BaseModel):
     source: str
     mtime: str
     size: int
+    ext: str = ""
 
 
 class OutputFileOut(BaseModel):
@@ -38,6 +40,8 @@ class OutputFileOut(BaseModel):
     mtime: str
     size: int
     content: str
+    ext: str = ""
+    previewable: bool = True
 
 
 class OutputStatusOut(BaseModel):
@@ -59,6 +63,7 @@ def _entry_out(e: VaultEntry) -> OutputEntryOut:
         source=e.source,
         mtime=_fmt_mtime(e.mtime),
         size=e.size,
+        ext=e.ext or "",
     )
 
 
@@ -91,12 +96,28 @@ async def outputs_recent(
     since_hours: float | None = Query(
         None, ge=0.1, le=24 * 30, description="仅返回该小时数内修改的文档"
     ),
+    scopes: list[str] = Query(
+        default=[],
+        description="相对 vault 的目录范围，可多选；空=整库",
+    ),
 ):
     if source and source not in ("openclaw", "hermes"):
         source = None
+    scope_list = normalize_scopes(scopes)
+    logger.info(
+        "outputs recent request limit=%d source=%s since_hours=%s scopes=%s",
+        limit,
+        source or "all",
+        since_hours,
+        scope_list or "all",
+    )
     try:
         entries = list_recent(
-            limit=limit, source=source, q=q, since_hours=since_hours
+            limit=limit,
+            source=source,
+            q=q,
+            since_hours=since_hours,
+            scopes=scope_list or None,
         )
     except OutputsVaultError as exc:
         _raise(exc)
@@ -120,4 +141,6 @@ async def outputs_file(
         mtime=_fmt_mtime(f.mtime),
         size=f.size,
         content=f.content,
+        ext=f.ext or "",
+        previewable=f.previewable,
     )

@@ -29,11 +29,24 @@ import type {
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
+function errorMessageFromBody(text: string, status: number): string {
+  if (!text) return `Request failed: ${status}`;
+  try {
+    const parsed = JSON.parse(text) as { detail?: unknown };
+    if (typeof parsed.detail === "string" && parsed.detail.trim()) {
+      return parsed.detail;
+    }
+  } catch {
+    /* plain text */
+  }
+  return text;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, init);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new Error(text || `Request failed: ${res.status}`);
+    throw new Error(errorMessageFromBody(text, res.status));
   }
   if (res.status === 204) return undefined as T;
   return res.json();
@@ -356,6 +369,8 @@ export const api = {
     source?: "openclaw" | "hermes";
     q?: string;
     since_hours?: number;
+    /** 相对 vault 的目录范围，可多选 */
+    scopes?: string[];
   }) => {
     const params = new URLSearchParams();
     if (opts?.limit) params.set("limit", String(opts.limit));
@@ -363,6 +378,10 @@ export const api = {
     if (opts?.q) params.set("q", opts.q);
     if (opts?.since_hours != null) {
       params.set("since_hours", String(opts.since_hours));
+    }
+    for (const s of opts?.scopes || []) {
+      const cleaned = s.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
+      if (cleaned) params.append("scopes", cleaned);
     }
     const qs = params.toString();
     return request<OutputEntry[]>(`/api/outputs/recent${qs ? `?${qs}` : ""}`);

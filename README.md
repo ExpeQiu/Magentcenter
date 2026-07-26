@@ -57,7 +57,7 @@ echo "AI_MOCK_MODE=true" >> .env
 - `EMBEDDING_PROVIDER=hash|openai|http` — 知识库向量（缺省 hash）
 - `ALERT_PROFILE=default` — 告警规则环境
 - `OPENCLAW_*` / `HERMES_*` — 各栈可执行文件与超时
-- `OUTPUTS_VAULT_ROOT` — OpenClaw/Hermes 文档 vault（控制台「输出物」）
+- `OUTPUTS_VAULT_ROOT` — Obsidian expe 库根（控制台「输出物」范围选择起点）
 
 ## CLI
 

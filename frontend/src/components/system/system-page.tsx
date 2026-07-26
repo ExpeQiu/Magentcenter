@@ -25,6 +25,7 @@ export function SystemPage() {
   const [newProfile, setNewProfile] = useState("");
   const [savingAlert, setSavingAlert] = useState(false);
   const [alertSaveMsg, setAlertSaveMsg] = useState("");
+  const [alertRulesOpen, setAlertRulesOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [repairingId, setRepairingId] = useState("");
@@ -254,6 +255,13 @@ export function SystemPage() {
               <p className="mt-2 text-xs text-red-400">
                 {status.cron_errors.length} 条错误
               </p>
+              <button
+                type="button"
+                onClick={() => router.push(wp.autopilots())}
+                className="mt-2 text-xs text-indigo-400 hover:underline"
+              >
+                在 Autopilot 查看全部 →
+              </button>
             </div>
             <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
               <p className="text-xs text-slate-500">Sessions（聚合）</p>
@@ -319,143 +327,139 @@ export function SystemPage() {
             </section>
           )}
 
-          <section>
-            <h2 className="mb-3 text-sm font-medium text-slate-300">全部 Cron</h2>
-            <div className="overflow-hidden rounded-xl border border-slate-800">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-800 bg-slate-900/80 text-left text-xs text-slate-400">
-                    <th className="px-4 py-3">运行时</th>
-                    <th className="px-4 py-3">名称</th>
-                    <th className="px-4 py-3">Agent</th>
-                    <th className="px-4 py-3">调度</th>
-                    <th className="px-4 py-3">状态</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {status.cron_jobs.map((j) => (
-                    <tr key={j.id} className="border-t border-slate-800/80">
-                      <td className="px-4 py-3 text-xs uppercase text-slate-500">
-                        {j.runtime || j.source || "—"}
-                      </td>
-                      <td className="px-4 py-3">{j.name}</td>
-                      <td className="px-4 py-3 font-mono text-xs">{j.agent_id}</td>
-                      <td className="px-4 py-3 text-xs text-slate-500">{j.schedule}</td>
-                      <td className="px-4 py-3">
-                        <StatusBadge status={j.status || j.last_status || "idle"} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </section>
-
-          <section>
-            <h2 className="mb-3 text-sm font-medium text-slate-300">告警规则</h2>
-            <form
-              onSubmit={saveAlertRules}
-              className="space-y-3 rounded-xl border border-slate-800 bg-slate-900/50 p-4"
+          <section className="rounded-xl border border-slate-800 bg-slate-900/50">
+            <button
+              type="button"
+              onClick={() => setAlertRulesOpen((v) => !v)}
+              className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left hover:bg-slate-800/40"
+              aria-expanded={alertRulesOpen}
             >
-              <div className="flex flex-wrap items-end gap-2">
-                <label className="block text-xs text-slate-500">
-                  环境 profile
-                  <select
-                    value={alertProfile}
-                    onChange={(e) => switchProfile(e.target.value)}
-                    className="mt-1 block min-w-[140px] rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
+              <div className="min-w-0">
+                <h2 className="text-sm font-medium text-slate-300">告警规则</h2>
+                {!alertRulesOpen && (
+                  <p className="mt-0.5 truncate text-xs text-slate-500">
+                    {alertProfile}
+                    {" · "}
+                    Cron {cronEnabled ? "开" : "关"}
+                    {" · "}
+                    Gateway {gatewayEnabled ? "开" : "关"}
+                    {" · "}
+                    间隔 {intervalDraft}s
+                    {alertSettings?.webhook_url_set ? " · Webhook 已配" : ""}
+                  </p>
+                )}
+              </div>
+              <span className="shrink-0 text-xs text-slate-500">
+                {alertRulesOpen ? "收起 ▾" : "展开 ▸"}
+              </span>
+            </button>
+            {alertRulesOpen && (
+              <form
+                onSubmit={saveAlertRules}
+                className="space-y-3 border-t border-slate-800 px-4 py-4"
+              >
+                <div className="flex flex-wrap items-end gap-2">
+                  <label className="block text-xs text-slate-500">
+                    环境 profile
+                    <select
+                      value={alertProfile}
+                      onChange={(e) => switchProfile(e.target.value)}
+                      className="mt-1 block min-w-[140px] rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
+                    >
+                      {profileList.map((p) => (
+                        <option key={p} value={p}>
+                          {p}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <input
+                    value={newProfile}
+                    onChange={(e) => setNewProfile(e.target.value)}
+                    placeholder="新环境名，如 prod"
+                    className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    onClick={createProfile}
+                    disabled={savingAlert || !newProfile.trim()}
+                    className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800 disabled:opacity-50"
                   >
-                    {profileList.map((p) => (
-                      <option key={p} value={p}>
-                        {p}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <input
-                  value={newProfile}
-                  onChange={(e) => setNewProfile(e.target.value)}
-                  placeholder="新环境名，如 prod"
-                  className="rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm"
-                />
-                <button
-                  type="button"
-                  onClick={createProfile}
-                  disabled={savingAlert || !newProfile.trim()}
-                  className="rounded-lg border border-slate-700 px-3 py-2 text-sm hover:bg-slate-800 disabled:opacity-50"
-                >
-                  创建环境
-                </button>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="flex items-center gap-2 text-sm text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={cronEnabled}
-                    onChange={(e) => setCronEnabled(e.target.checked)}
-                  />
-                  Cron 错误告警
-                </label>
-                <label className="flex items-center gap-2 text-sm text-slate-300">
-                  <input
-                    type="checkbox"
-                    checked={gatewayEnabled}
-                    onChange={(e) => setGatewayEnabled(e.target.checked)}
-                  />
-                  Gateway 宕机告警
-                </label>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
+                    创建环境
+                  </button>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex items-center gap-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={cronEnabled}
+                      onChange={(e) => setCronEnabled(e.target.checked)}
+                    />
+                    Cron 错误告警
+                  </label>
+                  <label className="flex items-center gap-2 text-sm text-slate-300">
+                    <input
+                      type="checkbox"
+                      checked={gatewayEnabled}
+                      onChange={(e) => setGatewayEnabled(e.target.checked)}
+                    />
+                    Gateway 宕机告警
+                  </label>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="block text-xs text-slate-500">
+                    检查间隔（秒，≥60）
+                    <input
+                      type="number"
+                      min={60}
+                      value={intervalDraft}
+                      onChange={(e) =>
+                        setIntervalDraft(Number(e.target.value) || 60)
+                      }
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
+                    />
+                  </label>
+                  <label className="block text-xs text-slate-500">
+                    磁盘告警阈值（%，0=关闭）
+                    <input
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={diskDraft}
+                      onChange={(e) => setDiskDraft(Number(e.target.value) || 0)}
+                      className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
+                    />
+                  </label>
+                </div>
                 <label className="block text-xs text-slate-500">
-                  检查间隔（秒，≥60）
+                  飞书 Webhook
+                  {alertSettings?.webhook_url_set && (
+                    <span className="ml-2 text-emerald-500/80">
+                      已配置 {alertSettings.webhook_url_masked}
+                    </span>
+                  )}
                   <input
-                    type="number"
-                    min={60}
-                    value={intervalDraft}
-                    onChange={(e) => setIntervalDraft(Number(e.target.value) || 60)}
+                    type="url"
+                    value={webhookDraft}
+                    onChange={(e) => setWebhookDraft(e.target.value)}
+                    placeholder="留空则不修改现有 URL"
                     className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
                   />
                 </label>
-                <label className="block text-xs text-slate-500">
-                  磁盘告警阈值（%，0=关闭）
-                  <input
-                    type="number"
-                    min={0}
-                    max={100}
-                    value={diskDraft}
-                    onChange={(e) => setDiskDraft(Number(e.target.value) || 0)}
-                    className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
-                  />
-                </label>
-              </div>
-              <label className="block text-xs text-slate-500">
-                飞书 Webhook
-                {alertSettings?.webhook_url_set && (
-                  <span className="ml-2 text-emerald-500/80">
-                    已配置 {alertSettings.webhook_url_masked}
-                  </span>
-                )}
-                <input
-                  type="url"
-                  value={webhookDraft}
-                  onChange={(e) => setWebhookDraft(e.target.value)}
-                  placeholder="留空则不修改现有 URL"
-                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200"
-                />
-              </label>
-              <div className="flex flex-wrap items-center gap-3">
-                <button
-                  type="submit"
-                  disabled={savingAlert}
-                  className="rounded-lg bg-indigo-600 px-4 py-2 text-sm hover:bg-indigo-500 disabled:opacity-50"
-                >
-                  {savingAlert ? "保存中…" : "保存规则"}
-                </button>
-                {alertSaveMsg && (
-                  <span className="text-xs text-slate-400">{alertSaveMsg}</span>
-                )}
-              </div>
-            </form>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="submit"
+                    disabled={savingAlert}
+                    className="rounded-lg bg-indigo-600 px-4 py-2 text-sm hover:bg-indigo-500 disabled:opacity-50"
+                  >
+                    {savingAlert ? "保存中…" : "保存规则"}
+                  </button>
+                  {alertSaveMsg && (
+                    <span className="text-xs text-slate-400">{alertSaveMsg}</span>
+                  )}
+                </div>
+              </form>
+            )}
           </section>
 
           <section>
