@@ -80,6 +80,23 @@ async def dispatch_cron_repair(
         )
 
     prompt = build_repair_prompt(job, note=note)
+    # 将本次症状写入故障百科，供后续 ops 检索
+    try:
+        from app.core.knowledge import upsert_incident_from_alert
+
+        await upsert_incident_from_alert(
+            alert_key=f"cron:{job.id}:{run_id}",
+            title=f"Cron 异常 · {job.name or job.id}",
+            symptom=f"{job.name or job.id} last_status={job.last_status or job.status or 'error'}",
+            root_cause=note.strip() or "cron alert",
+            fix="派单 ops 诊断；查日志 / session / gateway / 依赖",
+            cron_id=job.id,
+            runtime=repair_runtime,
+            workspace_id=workspace_id,
+        )
+    except Exception as e:
+        logger.warning("cron repair incident upsert failed cron_id=%s: %s", job.id, e)
+
     logger.info(
         "cron repair dispatch run_id=%s cron_id=%s cron_name=%s runtime=%s agent_id=%s",
         run_id,
@@ -98,6 +115,7 @@ async def dispatch_cron_repair(
                 "优先诊断与安全修复，重大变更前确认授权。"
             ),
             workspace_id=workspace_id,
+            inject_knowledge=True,
         )
     )
     logger.info(

@@ -9,7 +9,9 @@ rm -f "$HOME/Library/LaunchAgents/com.agentcenter.backend.plist"
 rm -f "$HOME/Library/LaunchAgents/com.agentcenter.frontend.plist"
 
 # 停止看门狗
+launchctl remove com.agentcenter.watchdog 2>/dev/null || true
 pkill -f "AgentCenter/watchdog.sh" 2>/dev/null || true
+/usr/bin/screen -S agentcenter-watchdog -X quit 2>/dev/null || true
 
 # 移除登录项
 osascript <<'APPLESCRIPT' 2>/dev/null || true

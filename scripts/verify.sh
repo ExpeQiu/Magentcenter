@@ -101,13 +101,21 @@ check "告警规则落盘" "python3 -c \"import json; from pathlib import Path; 
 
 check "告警多环境" "curl -sf -X POST '$BASE_URL/api/settings/alert/profiles' -H 'Content-Type: application/json' -d '{\"name\":\"verify_env\",\"from_current\":true,\"activate\":false}' >/dev/null && curl -sf -X POST '$BASE_URL/api/settings/alert/profiles/verify_env/activate' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('active')=='verify_env'\" && curl -sf -X POST '$BASE_URL/api/settings/alert/profiles/default/activate' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('active')=='default'\""
 
-check "知识库状态" "curl -sf '$BASE_URL/api/knowledge/status' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('embedding',{}).get('provider')=='hash'\""
+check "知识库状态" "curl -sf '$BASE_URL/api/knowledge/status' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('embedding',{}).get('provider')=='hash'; assert 'playbook' in (d.get('kinds') or [])\""
 
-check "知识库检索" "curl -sf -X POST '$BASE_URL/api/knowledge/backfill' >/dev/null && curl -sf '$BASE_URL/api/knowledge/search?q=verify&mode=hybrid' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert isinstance(d,list)\""
+check "知识库蒸馏检索" "curl -sf -X POST '$BASE_URL/api/knowledge/backfill' >/dev/null && curl -sf '$BASE_URL/api/knowledge/search?q=verify&mode=hybrid' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert isinstance(d,list) and any(x.get('kind') in ('playbook','precedent','incident') for x in d)\""
 
-check "Session 消息索引" "curl -sf -X POST '$BASE_URL/api/knowledge/index-session/hermes-mock-session-1' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok' and d.get('indexed',0)>=1\""
+check "知识库注入预览" "curl -sf '$BASE_URL/api/knowledge/inject-preview?q=verify%20smoke' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert 'hits' in d and isinstance(d['hits'],list); assert d.get('block')=='' or '知识库参考' in d.get('block','')\""
 
-check "知识库向量检索" "curl -sf '$BASE_URL/api/knowledge/search?q=Mock%20Hermes&mode=vector' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert isinstance(d,list) and any(x.get('source_type')=='session_msg' for x in d)\""
+check "共享事实写入" "curl -sf -X POST '$BASE_URL/api/knowledge/entries' -H 'Content-Type: application/json' -d '{\"kind\":\"shared_fact\",\"title\":\"verify shared fact\",\"summary\":\"verify archive path convention\",\"tags\":[\"verify\"],\"payload\":{\"body\":\"verify archive path convention\"}}' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('kind')=='shared_fact' and d.get('id')\""
+
+INJECT_TASK=$("$AC" --json tasks run coder "verify knowledge inject precedent smoke" --runtime openclaw --wait --wait-timeout 30 \
+  | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['id'])")
+check "任务前注入" "curl -sf '$BASE_URL/api/tasks/$INJECT_TASK' | python3 -c \"import sys,json; d=json.load(sys.stdin); sp=d.get('system_prompt') or ''; assert '知识库参考' in sp, sp[:240]\""
+
+check "Session 消息归档" "curl -sf -X POST '$BASE_URL/api/knowledge/index-session/hermes-mock-session-1' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok' and d.get('indexed',0)>=1 and d.get('kind')=='archive'\""
+
+check "Archive 向量检索" "curl -sf '$BASE_URL/api/knowledge/search?q=Mock%20Hermes&mode=vector&include_archive=true&kind=archive' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert isinstance(d,list) and any(x.get('source_type')=='session_msg' or x.get('kind')=='archive' for x in d)\""
 
 check "输出物状态" "curl -sf '$BASE_URL/api/outputs/status' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert 'readable' in d and 'status' in d\""
 

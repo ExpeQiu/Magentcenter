@@ -126,19 +126,23 @@ class AlertRecord(Base):
 
 
 class KnowledgeRecord(Base):
-    """任务/会话输出知识条目（关键词 + 哈希向量）。"""
+    """知识卡片：Playbook / Precedent / Incident / ArtifactRef / SharedFact (+ archive)。"""
 
     __tablename__ = "knowledge_entries"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True, default="archive")
     source_type: Mapped[str] = mapped_column(String(32), index=True, default="task")
-    source_id: Mapped[str] = mapped_column(String(128), index=True, default="")
+    source_id: Mapped[str] = mapped_column(String(256), index=True, default="")
     runtime: Mapped[str] = mapped_column(String(32), index=True, default="")
     agent_id: Mapped[str] = mapped_column(String(128), index=True, default="")
     session_id: Mapped[str] = mapped_column(String(128), index=True, default="")
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
     title: Mapped[str] = mapped_column(String(256), default="")
     content: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[str] = mapped_column(String(32), default="")
+    tags_json: Mapped[str] = mapped_column(Text, default="[]")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
     embedding_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -162,6 +166,10 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("autopilots", "hermes_id", "VARCHAR(64) DEFAULT ''"),
     ("autopilots", "runtime", "VARCHAR(32) DEFAULT 'openclaw'"),
     ("knowledge_entries", "embedding_json", "TEXT DEFAULT ''"),
+    ("knowledge_entries", "kind", "VARCHAR(32) DEFAULT 'archive'"),
+    ("knowledge_entries", "workspace_id", "VARCHAR(64) DEFAULT ''"),
+    ("knowledge_entries", "tags_json", "TEXT DEFAULT '[]'"),
+    ("knowledge_entries", "payload_json", "TEXT DEFAULT '{}'"),
 ]
 
 

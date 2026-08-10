@@ -149,18 +149,36 @@ export interface EmbeddingStatus {
   mock?: boolean;
 }
 
+export type KnowledgeKind =
+  | "playbook"
+  | "precedent"
+  | "incident"
+  | "artifact_ref"
+  | "shared_fact"
+  | "archive"
+  | string;
+
 export interface KnowledgeHit {
   id: string;
+  kind: KnowledgeKind;
   source_type: string;
   source_id: string;
   runtime: string;
   agent_id: string;
   session_id: string;
+  workspace_id?: string;
   title: string;
   snippet: string;
   status: string;
+  tags?: string[];
+  payload?: Record<string, unknown>;
   score: number;
   created_at: string;
+}
+
+export interface KnowledgeInjectPreview {
+  block: string;
+  hits: KnowledgeHit[];
 }
 
 export interface OutputEntry {

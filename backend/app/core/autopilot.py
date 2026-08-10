@@ -160,7 +160,7 @@ class AutopilotManager:
                 await session.delete(rec)
                 await session.commit()
 
-    async def _fetch_openclaw_cron(self) -> list[AutopilotConfig]:
+    async def _fetch_openclaw_cron(self, *, strict: bool = False) -> list[AutopilotConfig]:
         if self.settings.ai_mock_mode:
             return [
                 AutopilotConfig(
@@ -205,12 +205,20 @@ class AutopilotManager:
             return items
         except Exception as e:
             logger.error("fetch openclaw cron failed: %s", e)
+            if strict:
+                raise
             return []
 
-    async def _fetch_hermes_cron(self) -> list[AutopilotConfig]:
+    async def _fetch_hermes_cron(self, *, strict: bool = False) -> list[AutopilotConfig]:
         if "hermes" not in self.settings.enabled_runtimes():
             return []
-        jobs = await self._hermes_monitor.get_cron_jobs()
+        try:
+            jobs = await self._hermes_monitor.get_cron_jobs()
+        except Exception as e:
+            logger.error("fetch hermes cron failed: %s", e)
+            if strict:
+                raise
+            return []
         items: list[AutopilotConfig] = []
         for j in jobs:
             hid = j.id.replace("hermes:", "", 1) if j.id.startswith("hermes:") else j.id
@@ -231,7 +239,6 @@ class AutopilotManager:
                 )
             )
         return items
-
     async def sync_from_openclaw(self) -> list[AutopilotConfig]:
         jobs = await self._fetch_openclaw_cron()
         synced = []
@@ -377,6 +384,117 @@ class AutopilotManager:
                     merged.append(j)
         return merged
 
+    async def _drop_local(self, autopilot_id: str, reason: str) -> None:
+        """删除本地记录（不触碰外部 cron；用于对账清孤儿）。"""
+        if autopilot_id in self._tasks:
+            self._tasks[autopilot_id].cancel()
+            del self._tasks[autopilot_id]
+        cfg = self._configs.pop(autopilot_id, None)
+        await self._delete_db(autopilot_id)
+        logger.info(
+            "autopilot reconcile drop id=%s name=%s reason=%s",
+            autopilot_id,
+            cfg.name if cfg else "-",
+            reason,
+        )
+
+    async def reconcile_external(self) -> dict:
+        """以 OpenClaw / Hermes 现况为准，更新本地库后返回聚合列表。
+
+        - 外部已删除的镜像本地行 → 删除
+        - 外部仍存在的 → 同步字段到本地
+        - 外部新增未镜像的 → 写入本地
+        - 纯本地（无 openclaw_id/hermes_id）→ 保留
+        拉取失败时跳过该侧清理，避免误删。
+        """
+        pruned: list[str] = []
+        oc_ok = False
+        hm_ok = False
+        live_oc: set[str] = set()
+        live_hm: set[str] = set()
+
+        if "openclaw" in self.settings.enabled_runtimes():
+            try:
+                oc_jobs = await self._fetch_openclaw_cron(strict=True)
+                live_oc = {j.openclaw_id for j in oc_jobs if j.openclaw_id}
+                oc_ok = True
+            except Exception as e:
+                logger.warning("reconcile skip openclaw prune: %s", e)
+
+        if "hermes" in self.settings.enabled_runtimes():
+            try:
+                hm_jobs = await self._fetch_hermes_cron(strict=True)
+                live_hm = {j.hermes_id for j in hm_jobs if j.hermes_id}
+                hm_ok = True
+            except Exception as e:
+                logger.warning("reconcile skip hermes prune: %s", e)
+
+        for cfg in list(self._configs.values()):
+            oc_id = (cfg.openclaw_id or "").strip()
+            hm_id = (cfg.hermes_id or "").strip()
+            if not oc_id and not hm_id:
+                continue  # 纯本地调度
+
+            changed = False
+            if oc_id and oc_ok and oc_id not in live_oc:
+                cfg.openclaw_id = ""
+                changed = True
+                logger.info(
+                    "autopilot reconcile clear stale openclaw_id id=%s oc=%s",
+                    cfg.id,
+                    oc_id,
+                )
+            if hm_id and hm_ok and hm_id not in live_hm:
+                cfg.hermes_id = ""
+                changed = True
+                logger.info(
+                    "autopilot reconcile clear stale hermes_id id=%s hm=%s",
+                    cfg.id,
+                    hm_id,
+                )
+
+            if not (cfg.openclaw_id or "").strip() and not (cfg.hermes_id or "").strip():
+                # 曾绑定外部 cron，现两侧均已不存在 → 删除本地镜像
+                await self._drop_local(
+                    cfg.id,
+                    f"external_gone oc={oc_id or '-'} hm={hm_id or '-'}",
+                )
+                pruned.append(cfg.id)
+                continue
+
+            if changed:
+                if cfg.openclaw_id and cfg.hermes_id:
+                    cfg.source = "bidirectional"
+                elif cfg.hermes_id:
+                    cfg.source = "hermes"
+                    cfg.runtime = "hermes"
+                else:
+                    cfg.source = "openclaw"
+                    cfg.runtime = "openclaw"
+                await self._save(cfg)
+
+        synced_oc: list[AutopilotConfig] = []
+        synced_hm: list[AutopilotConfig] = []
+        if oc_ok:
+            synced_oc = await self.sync_from_openclaw()
+        if hm_ok:
+            synced_hm = await self.sync_from_hermes()
+
+        items = await self.list_autopilots(include_openclaw=True, include_hermes=True)
+        logger.info(
+            "autopilot reconcile done pruned=%d synced_oc=%d synced_hm=%d list=%d",
+            len(pruned),
+            len(synced_oc),
+            len(synced_hm),
+            len(items),
+        )
+        return {
+            "pruned": pruned,
+            "pruned_count": len(pruned),
+            "synced_openclaw": len(synced_oc),
+            "synced_hermes": len(synced_hm),
+            "items": items,
+        }
     def get_autopilot(self, autopilot_id: str) -> AutopilotConfig | None:
         return self._configs.get(autopilot_id)
 

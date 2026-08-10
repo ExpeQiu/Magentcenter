@@ -26,6 +26,7 @@ function sourceLabel(a: AutopilotInfo) {
 export function AutopilotsPage() {
   const [items, setItems] = useState<AutopilotInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [view, setView] = useState<ViewMode>("list");
   const [showForm, setShowForm] = useState(false);
   const [name, setName] = useState("");
@@ -36,15 +37,33 @@ export function AutopilotsPage() {
   const router = useRouter();
   const wp = useWorkspacePaths();
 
-  const load = () =>
-    api
-      .autopilots(true, true)
-      .then(setItems)
+  const load = (isRefresh = false) => {
+    if (isRefresh) setRefreshing(true);
+    else setLoading(true);
+    const req = isRefresh
+      ? api.refreshAutopilots().then((data) => {
+          setItems(data.items);
+          console.info(
+            "[autopilot] reconciled count=%d pruned=%d synced_oc=%d synced_hm=%d",
+            data.count,
+            data.pruned_count,
+            data.synced_openclaw,
+            data.synced_hermes,
+          );
+        })
+      : api.autopilots(true, true).then((data) => {
+          setItems(data);
+        });
+    return req
       .catch(console.error)
-      .finally(() => setLoading(false));
+      .finally(() => {
+        setLoading(false);
+        setRefreshing(false);
+      });
+  };
 
   useEffect(() => {
-    load();
+    void load();
   }, []);
 
   const create = async (e: React.FormEvent) => {
@@ -121,6 +140,15 @@ export function AutopilotsPage() {
               className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm hover:bg-indigo-500"
             >
               + 新建
+            </button>
+            <button
+              type="button"
+              onClick={() => void load(true)}
+              disabled={refreshing || loading}
+              className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800 disabled:opacity-50"
+              title="按 OpenClaw / Hermes 现况对账本地列表（删除外部已清掉的镜像）"
+            >
+              {refreshing ? "对账中…" : "刷新"}
             </button>
           </div>
         }

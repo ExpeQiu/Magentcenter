@@ -75,6 +75,16 @@
 - 来源标签：`HermesCenter/**` → hermes，其余 → openclaw
 - 与知识库（SQLite 检索）并列，不合并
 
+### 知识库（卡片内容模型）
+
+详见 [knowledge.md](./knowledge.md)。
+
+- **真源种类**：`playbook` / `precedent` / `incident` / `artifact_ref` / `shared_fact`（`archive` 仅手工归档，默认不检索）
+- **划界**：运行时 `MEMORY.md` / Skills / Outputs 不进中心检索主路径；中心库做跨栈机构记忆
+- **闭环**：任务完成 → 蒸馏卡片；任务创建前 → Top-K 注入 `system_prompt`（`KNOWLEDGE_INJECT_*`）
+- **字段**：`kind` / `workspace_id` / `tags_json` / `payload_json` + hybrid 检索
+- **脱敏**：入库与注入前 redact token / webhook / `sk-` 等
+
 ## 分期路线
 
 - **Phase 1**：API 网关 + 任务引擎（OpenClaw）
@@ -87,5 +97,6 @@
 - **Phase 8**：Session/任务知识库检索；告警持久化；Hermes 技能下线
 - **Phase 9**：哈希向量检索；告警规则落盘；Session 消息级索引
 - **Phase 10**：可选 Embedding HTTP；告警多环境 profile；知识库独立页
-- **Phase 11（当前）**：输出物 Tab（vault 目录/最近/预览）
-- **Phase 12（下一步）**：知识库权限/租户隔离；Embedding 批量回填；告警 profile 导入导出
+- **Phase 11**：输出物 Tab（vault 目录/最近/预览）
+- **Phase 12（当前）**：知识库内容模型（卡片蒸馏 + 任务前注入 + workspace 字段 + 划界文档）
+- **Phase 13（下一步）**：Outputs→ArtifactRef 批量建指；Embedding 批量重嵌入；告警 profile 导入导出；卡片质量评分

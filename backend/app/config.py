@@ -53,6 +53,9 @@ class Settings(BaseSettings):
     embedding_api_url: str = ""
     embedding_api_key: str = ""
     embedding_model: str = "text-embedding-3-small"
+    # 任务创建前自动检索注入；任务完成后蒸馏卡片
+    knowledge_inject_enabled: bool = True
+    knowledge_inject_top_k: int = 3
 
     skills_dir: str = ""
     hermes_skills_dir: str = ""

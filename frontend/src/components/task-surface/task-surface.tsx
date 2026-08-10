@@ -49,6 +49,7 @@ export function TaskSurface({
         projectId: projectFilter || undefined,
         workspaceId: workspaceId || undefined,
         scheduled: viewMode === "gantt",
+        includeLive: viewMode !== "gantt" && !projectFilter,
       });
       setTasks(res.items);
     } catch (e) {

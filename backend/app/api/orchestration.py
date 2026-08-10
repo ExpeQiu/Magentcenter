@@ -242,6 +242,24 @@ async def list_autopilots(
     )
 
 
+@router.post("/api/autopilots/refresh")
+async def refresh_autopilots(request: Request):
+    """按 OpenClaw / Hermes 现况对账本地库，返回更新后的聚合列表。"""
+    ap = request.app.state.autopilot_manager
+    try:
+        result = await ap.reconcile_external()
+        return {
+            "pruned_count": result["pruned_count"],
+            "pruned": result["pruned"],
+            "synced_openclaw": result["synced_openclaw"],
+            "synced_hermes": result["synced_hermes"],
+            "items": result["items"],
+            "count": len(result["items"]),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/api/autopilots", status_code=201)
 async def create_autopilot(req: CreateAutopilotRequest, request: Request):
     ap = request.app.state.autopilot_manager

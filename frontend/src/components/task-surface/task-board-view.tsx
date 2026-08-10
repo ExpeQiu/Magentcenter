@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { TaskInfo } from "@/lib/types";
 import { useWorkspacePaths } from "@/lib/context/workspace-context";
 import { StatusBadge, truncate } from "@/components/ui/status-badge";
+import { isLiveTaskId, taskHref } from "@/lib/task-links";
 
 const COLUMNS = [
   { key: "queued", label: "排队", color: "border-amber-500/30" },
@@ -38,15 +39,22 @@ export function TaskBoardView({ tasks }: { tasks: TaskInfo[] }) {
               {items.map((t) => (
                 <Link
                   key={t.id}
-                  href={wp.taskDetail(t.id)}
-                  className="block rounded-lg border border-slate-800 bg-slate-900 p-3 transition hover:border-indigo-500/50"
+                  href={taskHref(t.id, wp)}
+                  className={`block rounded-lg border bg-slate-900 p-3 transition hover:border-indigo-500/50 ${
+                    isLiveTaskId(t.id)
+                      ? "border-sky-700/50"
+                      : "border-slate-800"
+                  }`}
                 >
                   <p className="text-sm text-slate-200">
                     {truncate(t.prompt, 60)}
                   </p>
-                  <div className="mt-2 flex items-center justify-between">
+                  <div className="mt-2 flex items-center justify-between gap-2">
                     <span className="font-mono text-xs text-slate-500">
                       {t.agent_id}
+                      {isLiveTaskId(t.id) && (
+                        <span className="ml-1 uppercase text-sky-500">live</span>
+                      )}
                     </span>
                     <StatusBadge status={t.status} />
                   </div>

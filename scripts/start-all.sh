@@ -23,9 +23,9 @@ if [[ -x "$APP_SUPPORT/watchdog.sh" ]]; then
         >> "$LOG_DIR/watchdog.log" 2>&1 || true
     fi
     if ! pgrep -f "$APP_SUPPORT/watchdog.sh" >/dev/null 2>&1; then
-      # fallback：screen 会话保活看门狗
-      screen -S agentcenter-watchdog -X quit 2>/dev/null || true
-      screen -dmS agentcenter-watchdog /bin/bash "$APP_SUPPORT/watchdog.sh"
+      # fallback：screen 会话保活看门狗（绝对路径，launchctl PATH 常缺 screen）
+      /usr/bin/screen -S agentcenter-watchdog -X quit 2>/dev/null || true
+      /usr/bin/screen -dmS agentcenter-watchdog /bin/bash "$APP_SUPPORT/watchdog.sh"
     fi
     echo "[start-all] 看门狗已拉起"
   fi

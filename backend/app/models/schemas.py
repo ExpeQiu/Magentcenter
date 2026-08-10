@@ -113,6 +113,8 @@ class CreateTaskRequest(BaseModel):
     due_date: str = ""
     timeout: int | None = None
     resume_session_id: str | None = None
+    # None = 跟随 Settings.knowledge_inject_enabled
+    inject_knowledge: bool | None = None
 
 
 class UpdateTaskRequest(BaseModel):

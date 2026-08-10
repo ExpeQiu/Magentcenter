@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import type { OutputEntry, OutputFile, OutputStatus } from "@/lib/types";
 import { PageHeader } from "@/components/layout/page-header";
@@ -103,6 +104,7 @@ function scopeRootEntries(scopes: string[]): OutputEntry[] {
 }
 
 export function OutputsPage() {
+  const searchParams = useSearchParams();
   const [status, setStatus] = useState<OutputStatus | null>(null);
   const [view, setView] = useState<ViewMode>("recent");
   const [source, setSource] = useState<SourceFilter>("all");
@@ -131,20 +133,45 @@ export function OutputsPage() {
     }));
   }, [dirPath]);
 
-  useEffect(() => {
-    api
-      .outputsStatus()
-      .then(setStatus)
-      .catch((err) => {
-        console.error(err);
-        setStatus({
-          status: "unavailable",
-          readable: false,
-          root_name: "",
-          message: "无法连接输出物 API",
-        });
-      });
+  const refreshStatus = useCallback(async () => {
+    const maxAttempts = 3;
+    let lastErr: unknown;
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const s = await api.outputsStatus();
+        setStatus(s);
+        console.info(
+          "[outputs] status ok readable=%s root=%s attempt=%d",
+          s.readable,
+          s.root_name,
+          i + 1
+        );
+        return;
+      } catch (err) {
+        lastErr = err;
+        console.error("[outputs] status failed attempt=%d", i + 1, err);
+        if (i < maxAttempts - 1) {
+          await new Promise((r) => setTimeout(r, 400 * (i + 1)));
+        }
+      }
+    }
+    const detail =
+      lastErr instanceof Error && lastErr.message
+        ? lastErr.message
+        : "无法连接输出物 API";
+    setStatus({
+      status: "unavailable",
+      readable: false,
+      root_name: "",
+      message:
+        `${detail}。请用系统浏览器打开 http://127.0.0.1:3013（勿用 Cursor 内置预览），` +
+        "并确认后端 http://127.0.0.1:8013/api/health 与 ./scripts/start.sh 已启动。",
+    });
   }, []);
+
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
 
   const loadList = useCallback(async () => {
     if (status && !status.readable) {
@@ -216,12 +243,19 @@ export function OutputsPage() {
     void loadList();
   }, [loadList]);
 
-  const openFile = async (path: string) => {
+  const openFile = useCallback(async (path: string) => {
     setSelectedPath(path);
     setFileLoading(true);
     try {
       const f = await api.outputsFile(path);
       setFile(f);
+      // 树视图定位到父目录，便于继续浏览
+      const parent = path.includes("/")
+        ? path.split("/").slice(0, -1).join("/")
+        : "";
+      setView("tree");
+      setDirPath(parent);
+      console.info("[outputs] openFile ok path=%s", path);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "读取文件失败";
       console.error("[outputs] openFile failed", { path, detail, err });
@@ -230,7 +264,15 @@ export function OutputsPage() {
     } finally {
       setFileLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const fileParam =
+      searchParams.get("file") || searchParams.get("path") || "";
+    if (!fileParam) return;
+    if (status && !status.readable) return;
+    void openFile(fileParam);
+  }, [searchParams, status, openFile]);
 
   const onEntryClick = (e: OutputEntry) => {
     if (e.kind === "dir") {
@@ -256,6 +298,15 @@ export function OutputsPage() {
           description={
             status.message ||
             "请在 .env 配置 OUTPUTS_VAULT_ROOT 指向 Obsidian expe 目录"
+          }
+          action={
+            <button
+              type="button"
+              onClick={() => void refreshStatus()}
+              className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
+            >
+              重试连接
+            </button>
           }
         />
       </>

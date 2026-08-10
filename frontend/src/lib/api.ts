@@ -7,6 +7,7 @@ import type {
   InstallSkillResult,
   EmbeddingStatus,
   KnowledgeHit,
+  KnowledgeInjectPreview,
   KanbanBoard,
   KanbanTask,
   OutputEntry,
@@ -69,6 +70,8 @@ export const api = {
       projectId?: string;
       workspaceId?: string;
       scheduled?: boolean;
+      /** 合并 OpenClaw/Hermes 近期 Session 为执行中（默认 true） */
+      includeLive?: boolean;
     }
   ) => {
     const q = new URLSearchParams({ page: String(page), page_size: "100" });
@@ -77,6 +80,7 @@ export const api = {
     if (opts?.projectId) q.set("project_id", opts.projectId);
     if (opts?.workspaceId) q.set("workspace_id", opts.workspaceId);
     if (opts?.scheduled) q.set("scheduled", "true");
+    if (opts?.includeLive === false) q.set("include_live", "false");
     return request<TaskListResponse>(`/api/tasks?${q}`);
   },
   task: (id: string) => request<TaskInfo>(`/api/tasks/${id}`),
@@ -276,6 +280,15 @@ export const api = {
     request<AutopilotInfo[]>(
       `/api/autopilots?include_openclaw=${includeOpenclaw}&include_hermes=${includeHermes}`
     ),
+  refreshAutopilots: () =>
+    request<{
+      items: AutopilotInfo[];
+      count: number;
+      pruned_count: number;
+      pruned: string[];
+      synced_openclaw: number;
+      synced_hermes: number;
+    }>("/api/autopilots/refresh", { method: "POST" }),
   createAutopilot: (data: {
     name: string;
     agent_id: string;
@@ -337,21 +350,106 @@ export const api = {
     request<SwarmGraph>(`/api/kanban/swarm/${encodeURIComponent(rootId)}`),
   knowledgeSearch: (
     q: string,
-    opts?: { limit?: number; runtime?: string; mode?: "keyword" | "vector" | "hybrid" }
+    opts?: {
+      limit?: number;
+      runtime?: string;
+      mode?: "keyword" | "vector" | "hybrid";
+      kind?: string;
+      workspaceId?: string;
+      includeArchive?: boolean;
+    }
   ) => {
     const params = new URLSearchParams({ q });
     if (opts?.limit) params.set("limit", String(opts.limit));
     if (opts?.runtime) params.set("runtime", opts.runtime);
     if (opts?.mode) params.set("mode", opts.mode);
+    if (opts?.kind) params.set("kind", opts.kind);
+    if (opts?.workspaceId) params.set("workspace_id", opts.workspaceId);
+    if (opts?.includeArchive) params.set("include_archive", "true");
     return request<KnowledgeHit[]>(`/api/knowledge/search?${params}`);
   },
   knowledgeStatus: () =>
-    request<{ status: string; embedding: EmbeddingStatus }>("/api/knowledge/status"),
+    request<{
+      status: string;
+      embedding: EmbeddingStatus;
+      kinds?: string[];
+      inject_default_kinds?: string[];
+    }>("/api/knowledge/status"),
+  knowledgeList: (opts?: {
+    limit?: number;
+    kind?: string;
+    workspaceId?: string;
+    runtime?: string;
+  }) => {
+    const params = new URLSearchParams();
+    if (opts?.limit) params.set("limit", String(opts.limit));
+    if (opts?.kind) params.set("kind", opts.kind);
+    if (opts?.workspaceId) params.set("workspace_id", opts.workspaceId);
+    if (opts?.runtime) params.set("runtime", opts.runtime);
+    const qs = params.toString();
+    return request<KnowledgeHit[]>(`/api/knowledge/entries${qs ? `?${qs}` : ""}`);
+  },
   knowledgeBackfill: (limit = 200) =>
     request<{ indexed: number; status: string; embedding?: EmbeddingStatus }>(
       `/api/knowledge/backfill?limit=${limit}`,
       { method: "POST" }
     ),
+  knowledgeMineVault: (body?: {
+    scope?: string;
+    limit?: number;
+    distill_high_value?: boolean;
+    workspace_id?: string;
+  }) =>
+    request<{
+      status: string;
+      scope: string;
+      scanned: number;
+      artifact_refs: number;
+      playbooks: number;
+      incidents: number;
+      shared_facts: number;
+      skipped: number;
+      errors: number;
+    }>("/api/knowledge/mine-vault", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        scope: body?.scope ?? "openclaw",
+        limit: body?.limit ?? 300,
+        distill_high_value: body?.distill_high_value ?? true,
+        workspace_id: body?.workspace_id ?? "",
+      }),
+    }),
+  knowledgeCreateEntry: (body: {
+    kind: string;
+    title: string;
+    summary?: string;
+    workspace_id?: string;
+    tags?: string[];
+    payload?: Record<string, unknown>;
+  }) =>
+    request<KnowledgeHit>("/api/knowledge/entries", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  knowledgeGet: (id: string) =>
+    request<KnowledgeHit>(`/api/knowledge/entries/${encodeURIComponent(id)}`),
+  knowledgeDeleteEntry: (id: string) =>
+    request<{ status: string }>(`/api/knowledge/entries/${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    }),
+  knowledgeInjectPreview: (
+    q: string,
+    opts?: { workspaceId?: string; runtime?: string; topK?: number; forOps?: boolean }
+  ) => {
+    const params = new URLSearchParams({ q });
+    if (opts?.workspaceId) params.set("workspace_id", opts.workspaceId);
+    if (opts?.runtime) params.set("runtime", opts.runtime);
+    if (opts?.topK) params.set("top_k", String(opts.topK));
+    if (opts?.forOps) params.set("for_ops", "true");
+    return request<KnowledgeInjectPreview>(`/api/knowledge/inject-preview?${params}`);
+  },
   indexSession: (sessionId: string) =>
     request<{ status: string; session_id: string; indexed: number; runtime?: string }>(
       `/api/knowledge/index-session/${encodeURIComponent(sessionId)}`,

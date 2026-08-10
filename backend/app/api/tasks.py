@@ -1,18 +1,22 @@
 """任务 CRUD 与 SSE 事件流 API。"""
 
 import json
+import logging
 from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from sse_starlette.sse import EventSourceResponse
 
 from app.core import workspaces as workspace_service
+from app.core.live_tasks import collect_live_tasks
 from app.models.schemas import (
     CreateTaskRequest,
     TaskInfo,
     TaskListResponse,
     UpdateTaskRequest,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -36,6 +40,10 @@ async def list_tasks(
     project_id: str | None = None,
     workspace_id: str | None = None,
     scheduled: bool = False,
+    include_live: bool = Query(
+        True,
+        description="合并 OpenClaw/Hermes 近 15 分钟 Session 为执行中任务",
+    ),
 ) -> TaskListResponse:
     tm = request.app.state.task_manager
     wid = None
@@ -46,6 +54,44 @@ async def list_tasks(
     items, total = await tm.list_tasks(
         page, page_size, status, agent_id, project_id, wid, scheduled
     )
+
+    # 项目筛选下不掺 live session；scheduled/gantt 同理
+    want_live = (
+        include_live
+        and not project_id
+        and not scheduled
+        and (not status or status in ("running", "all"))
+    )
+    if want_live:
+        try:
+            monitor = request.app.state.monitor
+            sessions, _ = await monitor.get_sessions(limit=80)
+            known = {t.session_id for t in items if t.session_id}
+            # 再取一页无过滤的 running，避免漏掉已绑定 session 的本地任务
+            running_items, _ = await tm.list_tasks(
+                1, 100, "running", agent_id, None, None, False
+            )
+            known |= {t.session_id for t in running_items if t.session_id}
+            live = collect_live_tasks(
+                sessions,
+                known_session_ids=known,
+                agent_id=agent_id,
+                status=status or "running",
+            )
+            if live:
+                # live 置顶，便于看板「执行中」看见
+                items = live + items
+                total += len(live)
+                logger.info(
+                    "tasks list merged live=%d local_page=%d status=%s workspace=%s",
+                    len(live),
+                    len(items) - len(live),
+                    status or "all",
+                    wid or "all",
+                )
+        except Exception:
+            logger.exception("tasks list include_live failed")
+
     return TaskListResponse(items=items, total=total, page=page, page_size=page_size)
 
 

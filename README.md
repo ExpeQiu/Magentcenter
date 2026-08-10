@@ -35,9 +35,14 @@ echo "AI_MOCK_MODE=true" >> .env
 | POST/GET | `/api/kanban/swarm` | Swarm 图创建 / 按 root 查询 |
 | GET/PATCH | `/api/settings/alert` | 告警规则多环境（`alert_profiles.json`） |
 | GET/POST | `/api/settings/alert/profiles` | 告警环境列表 / 创建 / 激活 |
-| GET | `/api/knowledge/search` | 知识库检索（`mode=hybrid|keyword|vector`） |
-| GET | `/api/knowledge/status` | 向量 provider 状态 |
-| POST | `/api/knowledge/index-session/{id}` | Session 消息写入知识库 |
+| GET | `/api/knowledge/search` | 卡片检索（`kind`/`workspace_id`/`mode`；默认不含 archive） |
+| GET | `/api/knowledge/status` | 向量 provider + 支持的 kind |
+| GET | `/api/knowledge/inject-preview` | 任务前注入块预览 |
+| POST | `/api/knowledge/entries` | 创建 shared_fact 等卡片 |
+| POST | `/api/knowledge/artifact-refs` | 产物指针 |
+| POST | `/api/knowledge/backfill` | 从任务表蒸馏卡片 |
+| POST | `/api/knowledge/mine-vault` | 从 Obsidian openclaw 等目录挖掘知识卡片 |
+| POST | `/api/knowledge/index-session/{id}` | Session 消息写入 archive |
 | GET | `/api/outputs/status` | 输出物 vault 可读状态 |
 | GET | `/api/outputs/tree` | 输出物单层目录 |
 | GET | `/api/outputs/recent` | 最近 Markdown 产出 |
@@ -55,6 +60,8 @@ echo "AI_MOCK_MODE=true" >> .env
 - `DEFAULT_RUNTIME=openclaw` — 未指定 runtime 时的默认值
 - `AI_MOCK_MODE=true` — 跳过真实 CLI 调用
 - `EMBEDDING_PROVIDER=hash|openai|http` — 知识库向量（缺省 hash）
+- `KNOWLEDGE_INJECT_ENABLED` / `KNOWLEDGE_INJECT_TOP_K` — 任务前注入经验卡片
+- 知识库内容模型见 [guide/knowledge.md](guide/knowledge.md)
 - `ALERT_PROFILE=default` — 告警规则环境
 - `OPENCLAW_*` / `HERMES_*` — 各栈可执行文件与超时
 - `OUTPUTS_VAULT_ROOT` — Obsidian expe 库根（控制台「输出物」范围选择起点）

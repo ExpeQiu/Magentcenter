@@ -8,7 +8,7 @@ from collections import defaultdict
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 
 from app.config import Settings
 from app.core import projects as project_service
@@ -128,6 +128,45 @@ class TaskManager:
                     raise ValueError(f"workspace not found: {workspace_id}")
                 workspace_id = resolved
 
+        system_prompt = req.system_prompt or ""
+        want_inject = (
+            self.settings.knowledge_inject_enabled
+            if req.inject_knowledge is None
+            else bool(req.inject_knowledge)
+        )
+        if want_inject and (req.prompt or "").strip():
+            try:
+                from app.core.knowledge import build_task_inject_context
+
+                for_ops = req.agent_id in ("ops-agent", "ops") or "cron-repair" in system_prompt
+                # 跨 runtime 共享机构记忆：注入检索不按 runtime 收窄
+                block, hits = await build_task_inject_context(
+                    req.prompt,
+                    workspace_id=workspace_id,
+                    runtime=None,
+                    top_k=max(1, int(self.settings.knowledge_inject_top_k or 3)),
+                    for_ops=for_ops,
+                )
+                if block:
+                    system_prompt = (
+                        f"{block}\n\n{system_prompt}".strip()
+                        if system_prompt
+                        else block
+                    )
+                    logger.info(
+                        "knowledge injected task=%s hits=%d kinds=%s",
+                        task_id,
+                        len(hits),
+                        [h.kind for h in hits],
+                    )
+            except Exception as e:
+                logger.warning("knowledge inject failed agent=%s: %s", req.agent_id, e)
+
+        # 固化注入后的 system_prompt 与解析后的 workspace，供 dispatch / 蒸馏使用
+        req = req.model_copy(
+            update={"system_prompt": system_prompt, "workspace_id": workspace_id}
+        )  # type: ignore[arg-type]
+
         factory = get_session_factory()
         async with factory() as session:
             rec = TaskRecord(
@@ -137,7 +176,7 @@ class TaskManager:
                 agent_id=req.agent_id,
                 runtime=runtime,
                 prompt=req.prompt,
-                system_prompt=req.system_prompt or "",
+                system_prompt=system_prompt,
                 status="queued",
                 session_id=req.resume_session_id or "",
                 start_date=req.start_date or "",
@@ -149,12 +188,13 @@ class TaskManager:
             info = self._record_to_info(rec)
 
         logger.info(
-            "task created id=%s runtime=%s agent=%s project=%s workspace=%s",
+            "task created id=%s runtime=%s agent=%s project=%s workspace=%s inject=%s",
             task_id,
             runtime,
             req.agent_id,
             project_id or "-",
             workspace_id or "-",
+            want_inject,
         )
         if project_id:
             await project_service.update_task_count(project_id, 1)
@@ -245,9 +285,9 @@ class TaskManager:
             TaskEvent(type="result", content=final_status, status=final_status),
         )
         try:
-            from app.core.knowledge import upsert_from_task
+            from app.core.knowledge import distill_from_task
 
-            await upsert_from_task(
+            await distill_from_task(
                 task_id=task_id,
                 prompt=req.prompt or "",
                 output=output_text,
@@ -255,9 +295,11 @@ class TaskManager:
                 runtime=runtime,
                 session_id=session_id,
                 status=final_status,
+                workspace_id=req.workspace_id or "",
+                error=final_error,
             )
         except Exception as e:
-            logger.warning("knowledge index failed task=%s: %s", task_id, e)
+            logger.warning("knowledge distill failed task=%s: %s", task_id, e)
         logger.info(
             "task finished id=%s runtime=%s status=%s",
             task_id,
@@ -306,8 +348,20 @@ class TaskManager:
                 q = q.where(TaskRecord.project_id == project_id)
                 count_q = count_q.where(TaskRecord.project_id == project_id)
             if workspace_id:
-                q = q.where(TaskRecord.workspace_id == workspace_id)
-                count_q = count_q.where(TaskRecord.workspace_id == workspace_id)
+                # 工作区任务 + 无归属的活动任务（避免 running 被 workspace 过滤藏掉）
+                unscoped_active = and_(
+                    or_(
+                        TaskRecord.workspace_id == "",
+                        TaskRecord.workspace_id.is_(None),
+                    ),
+                    TaskRecord.status.in_(("queued", "running")),
+                )
+                ws_cond = or_(
+                    TaskRecord.workspace_id == workspace_id,
+                    unscoped_active,
+                )
+                q = q.where(ws_cond)
+                count_q = count_q.where(ws_cond)
             if scheduled:
                 scheduled_cond = or_(
                     TaskRecord.start_date != "",

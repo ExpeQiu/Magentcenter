@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { TaskInfo } from "@/lib/types";
 import { useWorkspacePaths } from "@/lib/context/workspace-context";
 import { StatusBadge, formatTime, truncate } from "@/components/ui/status-badge";
+import { isLiveTaskId, taskHref } from "@/lib/task-links";
 
 export function TaskListView({ tasks }: { tasks: TaskInfo[] }) {
   const wp = useWorkspacePaths();
@@ -27,10 +28,15 @@ export function TaskListView({ tasks }: { tasks: TaskInfo[] }) {
             >
               <td className="px-4 py-3 font-mono text-xs text-slate-400">
                 {t.agent_id}
+                {isLiveTaskId(t.id) && (
+                  <span className="ml-1 text-[10px] uppercase text-sky-500">
+                    live
+                  </span>
+                )}
               </td>
               <td className="max-w-md px-4 py-3">
                 <Link
-                  href={wp.taskDetail(t.id)}
+                  href={taskHref(t.id, wp)}
                   className="text-indigo-300 hover:underline"
                 >
                   {truncate(t.prompt, 100)}
