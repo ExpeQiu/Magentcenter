@@ -1,0 +1,43 @@
+appId: com.agentcenter.desktop
+productName: AgentCenter
+copyright: Copyright © AgentCenter
+directories:
+  output: dist
+  buildResources: build
+files:
+  - src/**
+  - package.json
+  - "!**/._*"
+  - "!**/.DS_Store"
+asar: false
+extraResources:
+  - from: resources/runtime
+    to: runtime
+    filter:
+      - "**/*"
+      - "!**/._*"
+      - "!**/.DS_Store"
+mac:
+  category: public.app-category.developer-tools
+  icon: build/icon.icns
+  target:
+    - dmg
+  artifactName: AgentCenter-${version}-mac-${arch}.${ext}
+  identity: null
+  gatekeeperAssess: false
+  hardenedRuntime: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+dmg:
+  title: AgentCenter
+  artifactName: AgentCenter-${version}-mac-${arch}.${ext}
+  contents:
+    - x: 160
+      y: 180
+      type: file
+    - x: 420
+      y: 180
+      type: link
+      path: /Applications
+afterPack: ./scripts/after-pack.js
+npmRebuild: false

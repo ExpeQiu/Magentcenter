@@ -30,6 +30,7 @@ if [[ ! -f "$NEXT_JS" ]]; then
   exit 78
 fi
 
-log "exec next dev port=$FRONTEND_PORT"
+FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
+log "exec next dev host=$FRONTEND_HOST port=$FRONTEND_PORT"
 cd "$FRONTEND"
-exec "$NODE_BIN" "$NEXT_JS" dev -p "$FRONTEND_PORT" -H 0.0.0.0
+exec "$NODE_BIN" "$NEXT_JS" dev -p "$FRONTEND_PORT" -H "$FRONTEND_HOST"

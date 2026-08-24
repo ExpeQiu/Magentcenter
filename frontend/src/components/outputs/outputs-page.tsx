@@ -249,12 +249,6 @@ export function OutputsPage() {
     try {
       const f = await api.outputsFile(path);
       setFile(f);
-      // 树视图定位到父目录，便于继续浏览
-      const parent = path.includes("/")
-        ? path.split("/").slice(0, -1).join("/")
-        : "";
-      setView("tree");
-      setDirPath(parent);
       console.info("[outputs] openFile ok path=%s", path);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "读取文件失败";
@@ -271,17 +265,20 @@ export function OutputsPage() {
       searchParams.get("file") || searchParams.get("path") || "";
     if (!fileParam) return;
     if (status && !status.readable) return;
+    // 深链只打开预览，不切换「最近/目录」Tab
     void openFile(fileParam);
   }, [searchParams, status, openFile]);
 
   const onEntryClick = (e: OutputEntry) => {
     if (e.kind === "dir") {
+      // 仅点击文件夹时进入目录视图
       setView("tree");
       setDirPath(e.path);
       setSelectedPath(null);
       setFile(null);
       return;
     }
+    // 点击文件：保持当前 Tab，只在右侧预览
     void openFile(e.path);
   };
 

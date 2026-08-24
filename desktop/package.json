@@ -1,0 +1,18 @@
+{
+  "name": "agentcenter-desktop",
+  "productName": "AgentCenter",
+  "version": "0.2.0",
+  "description": "AgentCenter 本地桌面应用：OpenClaw / Hermes 双运行时编排控制台",
+  "author": "AgentCenter",
+  "private": true,
+  "main": "./src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder --mac dmg"
+  },
+  "devDependencies": {
+    "electron": "^37.2.0",
+    "electron-builder": "^26.0.12"
+  }
+}

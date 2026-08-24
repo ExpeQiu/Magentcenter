@@ -1,5 +1,6 @@
 """AgentCenter 配置模块。"""
 
+import os
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -9,12 +10,12 @@ from app.models.runtime import parse_enabled_runtimes
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=os.environ.get("AGENTCENTER_ENV_FILE", ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
     )
 
-    host: str = "0.0.0.0"
+    host: str = "127.0.0.1"
     port: int = 8013
     log_level: str = "INFO"
     database_url: str = "sqlite+aiosqlite:///./data/agentcenter.db"

@@ -2,17 +2,17 @@
 
 import logging
 import uuid
-from pathlib import Path
 
 import yaml
 from sqlalchemy import select
 
 from app.models.db import WorkspaceRecord, get_session_factory
 from app.models.schemas import CreateWorkspaceRequest, WorkspaceInfo
+from app.paths import guide_dir
 
 logger = logging.getLogger(__name__)
 
-WORKSPACES_YML = Path(__file__).resolve().parents[3] / "guide" / "workspaces.yml"
+WORKSPACES_YML = guide_dir() / "workspaces.yml"
 DEFAULT_WORKSPACE_SLUG = "cyber"
 
 

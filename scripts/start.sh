@@ -44,7 +44,7 @@ source "$VENV/bin/activate"
 pip install -q -r "$BACKEND/requirements.txt"
 
 PORT="${PORT:-8013}"
-HOST="${HOST:-0.0.0.0}"
+HOST="${HOST:-127.0.0.1}"
 
 # 按端口停止旧进程
 pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)

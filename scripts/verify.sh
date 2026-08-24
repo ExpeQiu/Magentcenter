@@ -145,6 +145,19 @@ rm -rf "$HOME/.hermes/skills/_archive/_agentcenter_verify" "$HOME/.hermes/skills
 
 check "Agent 统计" "'$AC' --json agents stats | python3 -c \"import sys,json; json.load(sys.stdin)\""
 
+# 桌面端 / 控制台若在跑，确认 CSS 不是 404（打包拷错 distDir 时会无样式）
+FE_URL="http://127.0.0.1:${FRONTEND_PORT:-3013}"
+if curl -sf -o /dev/null "$FE_URL/cyber/tasks"; then
+  CSS_HREF=$(curl -sS "$FE_URL/cyber/tasks" | python3 -c "import sys,re; h=sys.stdin.read(); m=re.search(r'href=\"(/_next/static/css/[^\"]+)\"', h); print(m.group(1) if m else '')")
+  if [[ -n "$CSS_HREF" ]]; then
+    check "前端 CSS 可加载" "code=\$(curl -s -o /dev/null -w '%{http_code}' '$FE_URL$CSS_HREF'); [[ \$code == 200 ]]"
+  else
+    echo "[verify] 前端 HTML 未引用 CSS，跳过静态资源检查"
+  fi
+else
+  echo "[verify] 前端 3013 未运行，跳过 CSS 检查"
+fi
+
 check "系统状态" "curl -sf '$BASE_URL/api/system-status' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert 'gateway' in d and 'runtimes' in d and len(d['runtimes'])>=2\""
 
 check "Sessions" "curl -sf '$BASE_URL/api/sessions' | python3 -c \"import sys,json; json.load(sys.stdin)\""

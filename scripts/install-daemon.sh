@@ -47,7 +47,7 @@ for ((i=0; i<MAX_WAIT; i++)); do
 done
 [[ -x "\$PYTHON" ]] || { log "ERROR: python not found"; exit 78; }
 
-HOST="\${HOST:-0.0.0.0}"
+HOST="\${HOST:-127.0.0.1}"
 PORT="\${PORT:-$PORT}"
 
 log "exec uvicorn port=\$PORT"
@@ -79,7 +79,7 @@ done
 PORT="\${FRONTEND_PORT:-$FRONTEND_PORT}"
 log "exec next dev port=\$PORT"
 cd "\$ROOT/frontend" || { log "ERROR: cd failed"; exit 78; }
-exec "\$NODE_BIN" "\$NEXT_JS" dev -p "\$PORT" -H 0.0.0.0
+exec "\$NODE_BIN" "\$NEXT_JS" dev -p "\$PORT" -H "\${FRONTEND_HOST:-127.0.0.1}"
 SCRIPT
 
 cat > "$APP_SUPPORT/restart.sh" <<SCRIPT
@@ -94,22 +94,33 @@ FRONTEND_PORT="$FRONTEND_PORT"
 SCREEN="/usr/bin/screen"
 
 log() { echo "\$(date '+%Y-%m-%d %H:%M:%S') [restart] \$*" >> "\$LOG"; }
-log "begin"
+run_limited() {
+  local secs="\$1"
+  shift
+  perl -e 'alarm shift; exec @ARGV' "\$secs" "\$@"
+}
 
-"\$SCREEN" -S agentcenter-api -X quit 2>/dev/null || true
-"\$SCREEN" -S agentcenter-web -X quit 2>/dev/null || true
+log "begin"
+log "quit old screens"
+run_limited 8 "\$SCREEN" -S agentcenter-api -X quit 2>/dev/null || true
+run_limited 8 "\$SCREEN" -S agentcenter-web -X quit 2>/dev/null || true
 sleep 1
 
+log "free ports"
 for p in "\$PORT" "\$FRONTEND_PORT"; do
   pids=\$(lsof -tiTCP:"\$p" -sTCP:LISTEN 2>/dev/null || true)
   if [[ -n "\$pids" ]]; then
+    log "kill port=\$p pids=\$pids"
     kill \$pids 2>/dev/null || true
   fi
 done
 sleep 1
 
-"\$SCREEN" -dmS agentcenter-api /bin/bash "\$APP_SUPPORT/launch-backend.sh"
-"\$SCREEN" -dmS agentcenter-web /bin/bash "\$APP_SUPPORT/launch-frontend.sh"
+log "start screen sessions"
+run_limited 8 "\$SCREEN" -dmS agentcenter-api /bin/bash "\$APP_SUPPORT/launch-backend.sh" \\
+  || { log "ERROR: screen api failed rc=\$?"; exit 1; }
+run_limited 8 "\$SCREEN" -dmS agentcenter-web /bin/bash "\$APP_SUPPORT/launch-frontend.sh" \\
+  || { log "ERROR: screen web failed rc=\$?"; exit 1; }
 log "screen submitted"
 
 api_ok=false
@@ -155,10 +166,14 @@ fi
 log "starting services via Application Support restart.sh"
 /bin/bash "\$APP_SUPPORT/restart.sh" >> "\$LOG" 2>&1 || log "restart failed"
 
-# 看门狗：launchctl submit（勿挂在登录脚本进程树下）
+# 看门狗：KeepAlive LaunchAgent（勿挂在登录脚本进程树下）
+UID_NUM=\$(id -u)
 launchctl remove com.agentcenter.watchdog 2>/dev/null || true
-launchctl submit -l com.agentcenter.watchdog -- /bin/bash "\$APP_SUPPORT/watchdog.sh" \
-  >> "$LOG_DIR/watchdog.log" 2>&1 || true
+launchctl bootout "gui/\$UID_NUM/com.agentcenter.watchdog" 2>/dev/null || true
+if [[ -f "$HOME/Library/LaunchAgents/com.agentcenter.watchdog.plist" ]]; then
+  launchctl bootstrap "gui/\$UID_NUM" "$HOME/Library/LaunchAgents/com.agentcenter.watchdog.plist" 2>/dev/null || true
+  launchctl kickstart -k "gui/\$UID_NUM/com.agentcenter.watchdog" 2>/dev/null || true
+fi
 if ! pgrep -f "\$APP_SUPPORT/watchdog.sh" >/dev/null 2>&1; then
   /usr/bin/screen -dmS agentcenter-watchdog /bin/bash "\$APP_SUPPORT/watchdog.sh"
 fi
@@ -190,12 +205,43 @@ while true; do
   fi
   log "service down api=\$api_ok web=\$web_ok, restarting..."
   # 必须调用本机 restart.sh；直接执行 /Volumes/.../*.sh 会 Operation not permitted
-  /bin/bash "\$APP_SUPPORT/restart.sh" >> "\$LOG" 2>&1 || log "restart failed"
+  # restart 限时 90s，避免 screen/lsof 卡住后看门狗永久假死
+  if ! perl -e 'alarm shift; exec @ARGV' 90 /bin/bash "\$APP_SUPPORT/restart.sh" >> "\$LOG" 2>&1; then
+    log "restart failed or timed out"
+  fi
 done
 SCRIPT
 
 chmod +x "$APP_SUPPORT/login-start.sh" "$APP_SUPPORT/watchdog.sh" \
   "$APP_SUPPORT/restart.sh" "$APP_SUPPORT/launch-backend.sh" "$APP_SUPPORT/launch-frontend.sh"
+
+WATCHDOG_PLIST="$HOME/Library/LaunchAgents/com.agentcenter.watchdog.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+cat > "$WATCHDOG_PLIST" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.agentcenter.watchdog</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>$APP_SUPPORT/watchdog.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>$APP_SUPPORT</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>$LOG_DIR/watchdog.log</string>
+  <key>StandardErrorPath</key>
+  <string>$LOG_DIR/watchdog.log</string>
+</dict>
+</plist>
+PLIST
 
 # 注册 macOS 登录项
 osascript <<APPLESCRIPT

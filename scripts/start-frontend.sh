@@ -7,7 +7,7 @@ FRONTEND="$ROOT/frontend"
 PID_FILE="$ROOT/logs/frontend.pid"
 LOG_FILE="$ROOT/logs/frontend.log"
 FRONTEND_PORT="${FRONTEND_PORT:-3013}"
-FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
+FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 NEXT_BIN="$FRONTEND/node_modules/.bin/next"
 
 _stop_by_port() {

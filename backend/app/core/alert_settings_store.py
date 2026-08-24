@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
+from app.paths import data_dir as app_data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ _PROFILE_RE = re.compile(r"^[a-zA-Z0-9_-]{1,32}$")
 
 
 def data_dir() -> Path:
-    return Path(__file__).resolve().parents[2] / "data"
+    return app_data_dir()
 
 
 def legacy_path() -> Path:

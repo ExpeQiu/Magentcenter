@@ -8,7 +8,7 @@ FRONTEND="$ROOT/frontend"
 VENV="$BACKEND/.venv"
 PORT="${PORT:-8013}"
 FRONTEND_PORT="${FRONTEND_PORT:-3013}"
-FRONTEND_HOST="${FRONTEND_HOST:-0.0.0.0}"
+FRONTEND_HOST="${FRONTEND_HOST:-127.0.0.1}"
 
 # 加载 .env
 if [[ -f "$ROOT/.env" ]]; then
@@ -42,7 +42,7 @@ fi
 screen -dmS agentcenter-api bash -c "
   cd '$BACKEND' && \
   source '$VENV/bin/activate' && \
-  exec uvicorn app.main:app --host 0.0.0.0 --port $PORT \
+  exec uvicorn app.main:app --host \${HOST:-127.0.0.1} --port $PORT \
     >> '$ROOT/logs/agentcenter.log' 2>&1
 "
 

@@ -4,12 +4,12 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from pathlib import Path
 
 import yaml
 from sqlalchemy import func, select
 
 from app.core import workspaces as workspace_service
+from app.paths import guide_dir
 from app.models.db import (
     ProjectRecord,
     ProjectResourceRecord,
@@ -28,7 +28,7 @@ from app.models.schemas import (
 
 logger = logging.getLogger(__name__)
 
-PROJECTS_YML = Path(__file__).resolve().parents[3] / "guide" / "projects.yml"
+PROJECTS_YML = guide_dir() / "projects.yml"
 
 
 def _record_to_info(rec: ProjectRecord) -> ProjectInfo:

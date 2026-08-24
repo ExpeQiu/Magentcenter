@@ -3,6 +3,9 @@ import type { NextConfig } from "next";
 const API_PORT = process.env.API_PORT || "8013";
 
 const nextConfig: NextConfig = {
+  output: process.env.AGENTCENTER_PACKAGING === "1" ? "standalone" : undefined,
+  distDir: process.env.NEXT_DIST_DIR || ".next",
+  eslint: { ignoreDuringBuilds: true },
   allowedDevOrigins: ["127.0.0.1", "localhost"],
   async rewrites() {
     return [

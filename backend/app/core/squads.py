@@ -1,15 +1,16 @@
 """小队（Squads）路由模块。"""
 
 import logging
-from pathlib import Path
 from typing import Literal
 
 import yaml
 from pydantic import BaseModel
 
+from app.paths import guide_dir
+
 logger = logging.getLogger(__name__)
 
-SQUADS_FILE = Path(__file__).resolve().parents[3] / "guide" / "squads.yml"
+SQUADS_FILE = guide_dir() / "squads.yml"
 
 
 class SquadInfo(BaseModel):

@@ -3,8 +3,15 @@ backend/.venv/
 backend/data/
 data/
 logs/
+dist/
 frontend/node_modules/
 frontend/.next/
+frontend/.next-pkg/
+desktop/node_modules/
+desktop/dist/
+desktop/.npm-cache/
+desktop/resources/runtime/
+desktop/resources/*.tar.gz
 __pycache__/
 *.pyc
 .DS_Store

@@ -100,6 +100,17 @@ echo "AI_MOCK_MODE=true" >> .env
 - `./scripts/stop.sh` — 停止后端+前端
 - `./scripts/status.sh` — 检查服务状态
 - `./scripts/verify.sh` — 冒烟验证
+- `./scripts/package-dmg.sh` — 打包 macOS DMG（输出 `dist/AgentCenter-*.dmg`）
+
+## 桌面安装包（macOS）
+
+```bash
+./scripts/package-dmg.sh
+```
+
+打开生成的 `dist/AgentCenter-0.2.0-mac-arm64.dmg`，把 **AgentCenter** 拖进「应用程序」。首次打开若被拦截：右键图标 → 打开。
+
+数据与配置在 `~/Library/Application Support/AgentCenter/`，日志在 `~/Library/Logs/AgentCenter/`。打包日志：`logs/package-dmg.log`。
 
 ## Phase 3 API
 

@@ -9,7 +9,7 @@ PYTHON="$VENV/bin/python"
 LOG_DIR="${AGENTCENTER_LOG_DIR:-$HOME/Library/Logs/AgentCenter}"
 LOG="$LOG_DIR/daemon-backend.log"
 PORT="${PORT:-8013}"
-HOST="${HOST:-0.0.0.0}"
+HOST="${HOST:-127.0.0.1}"
 MAX_WAIT=120
 
 mkdir -p "$LOG_DIR"
@@ -39,7 +39,7 @@ if [[ -f "$ROOT/.env" ]]; then
 fi
 
 PORT="${PORT:-8013}"
-HOST="${HOST:-0.0.0.0}"
+HOST="${HOST:-127.0.0.1}"
 
 log "exec uvicorn host=$HOST port=$PORT"
 cd "$BACKEND"

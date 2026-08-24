@@ -2,7 +2,6 @@
 
 import logging
 from contextlib import asynccontextmanager
-from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +18,7 @@ from app.core.task_manager import TaskManager
 from app.logging_setup import setup_logging
 from app.models.db import create_tables, init_db
 from app.models.schemas import HealthResponse
+from app.paths import data_dir, log_dir
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +26,9 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     settings = get_settings()
-    log_dir = str(Path(__file__).resolve().parents[2] / "logs")
-    setup_logging(settings.log_level, log_dir)
+    setup_logging(settings.log_level, str(log_dir()))
 
-    db_path = Path("data")
+    db_path = data_dir()
     db_path.mkdir(parents=True, exist_ok=True)
     init_db(settings.database_url)
     await create_tables()
