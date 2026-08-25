@@ -3,12 +3,14 @@
 import asyncio
 import json
 import logging
+import os
 import re
 import shutil
 import time
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from app.config import Settings
@@ -60,13 +62,30 @@ def _is_identifier(s: str) -> bool:
     return all(c.isalnum() or c in "-_./" for c in s)
 
 
+def _extract_json_value(raw: str):
+    """CLI 可能在 JSON 前打印 doctor 横幅，从第一个 [ 或 { 切开。"""
+    text = (raw or "").strip()
+    if not text:
+        return None
+    decoder = json.JSONDecoder()
+    for marker in ("[", "{"):
+        idx = text.find(marker)
+        if idx < 0:
+            continue
+        try:
+            obj, _ = decoder.raw_decode(text[idx:])
+            return obj
+        except json.JSONDecodeError:
+            continue
+    return None
+
+
 def _parse_agents_json(raw: bytes) -> list[AgentInfo] | None:
     raw = raw.strip()
     if not raw:
         return None
-    try:
-        data = json.loads(raw)
-    except json.JSONDecodeError:
+    data = _extract_json_value(raw.decode("utf-8", errors="replace"))
+    if data is None:
         return None
 
     entries: list[dict] = []
@@ -80,6 +99,8 @@ def _parse_agents_json(raw: bytes) -> list[AgentInfo] | None:
     agents: list[AgentInfo] = []
     seen: set[str] = set()
     for e in entries:
+        if not isinstance(e, dict):
+            continue
         agent_id = e.get("id") or e.get("name", "")
         if not agent_id or agent_id in seen:
             continue
@@ -113,13 +134,41 @@ def _parse_agents_text(output: str) -> list[AgentInfo]:
             agent_id, name = m.group(1), m.group(2)
             if agent_id not in seen:
                 seen.add(agent_id)
-                agents.append(AgentInfo(id=agent_id, name=name))
+                agents.append(AgentInfo(id=agent_id, name=name, runtime="openclaw"))
             continue
         fields = line.split()
         if len(fields) >= 2 and _is_identifier(fields[0]) and _is_identifier(fields[1]):
             if fields[0] not in seen:
                 seen.add(fields[0])
-                agents.append(AgentInfo(id=fields[0], name=fields[0], model=fields[1]))
+                agents.append(
+                    AgentInfo(
+                        id=fields[0],
+                        name=fields[0],
+                        model=fields[1],
+                        runtime="openclaw",
+                    )
+                )
+    return agents
+
+
+def _agents_from_disk() -> list[AgentInfo]:
+    root = Path.home() / ".openclaw" / "agents"
+    if not root.is_dir():
+        return []
+    agents: list[AgentInfo] = []
+    for child in sorted(root.iterdir()):
+        if not child.is_dir() or child.name.startswith("."):
+            continue
+        agents.append(
+            AgentInfo(
+                id=child.name,
+                name=child.name,
+                workspace=str(child),
+                identity_name=child.name,
+                is_default=child.name == "main",
+                runtime="openclaw",
+            )
+        )
     return agents
 
 
@@ -301,11 +350,22 @@ class OpenClawAdapter:
 
     async def _run_cmd(self, *args: str, timeout: float = 30) -> tuple[int, str, str]:
         logger.info("openclaw cmd: %s %s", self.executable, " ".join(args))
+        env = os.environ.copy()
+        extras = [
+            str(Path.home() / ".npm-global" / "bin"),
+            "/opt/homebrew/bin",
+            "/usr/local/bin",
+            str(Path.home() / ".local" / "bin"),
+        ]
+        env["PATH"] = ":".join(extras + [env.get("PATH", "")])
+        env.setdefault("CI", "1")
+        env.setdefault("NO_COLOR", "1")
         proc = await asyncio.create_subprocess_exec(
             self.executable,
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -350,21 +410,32 @@ class OpenClawAdapter:
             ("agents", "list", "-o", "json"),
         ):
             try:
-                code, out, err = await self._run_cmd(*json_args, timeout=30)
+                _code, out, err = await self._run_cmd(*json_args, timeout=30)
                 if agents := _parse_agents_json(out.encode()):
                     logger.info("discovered %d agents via JSON", len(agents))
                     return agents
+                logger.warning(
+                    "agents list json unparsed args=%s stdout_head=%r stderr_head=%r",
+                    json_args,
+                    out[:180],
+                    err[:180],
+                )
             except Exception as e:
                 logger.debug("agents list %s failed: %s", json_args, e)
 
         try:
             _, out, _ = await self._run_cmd("agents", "list", timeout=30)
             agents = _parse_agents_text(out)
-            logger.info("discovered %d agents via text fallback", len(agents))
-            return agents
+            if agents:
+                logger.info("discovered %d agents via text fallback", len(agents))
+                return agents
         except Exception as e:
             logger.error("agents list failed: %s", e)
-            return []
+
+        disk = _agents_from_disk()
+        if disk:
+            logger.info("discovered %d agents via ~/.openclaw/agents", len(disk))
+        return disk
 
     def _build_args(
         self,

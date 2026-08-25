@@ -66,6 +66,8 @@ class Settings(BaseSettings):
         "/Users/expeqiu/Library/Mobile Documents/"
         "iCloud~md~obsidian/Documents/expe"
     )
+    # 额外只读根（逗号/分号/换行分隔的绝对路径），以文件夹名出现在一级目录
+    outputs_vault_extra: str = ""
 
     # System 页 Cron 修复派单目标 Agent（可回退 ops / main）
     ops_repair_agent_id: str = "ops-agent"

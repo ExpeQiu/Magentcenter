@@ -7,6 +7,7 @@ Playbook / Incident / SharedFact。不把整库原文灌进检索。
 from __future__ import annotations
 
 import logging
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,8 @@ SKIP_DIR_PARTS = frozenset(
         "__pycache__",
         ".trash",
         "svg-convert",
+        ".venv",
+        "venv",
     }
 )
 
@@ -153,26 +156,29 @@ def _collect_candidates(scope: str, limit: int) -> list[tuple[int, str, Path]]:
     root = resolve_path(scope, expect="dir")
     settings_root = resolve_path("", expect="dir")
     cands: list[tuple[int, str, Path]] = []
-    for p in root.rglob("*"):
-        if not p.is_file():
-            continue
-        if p.suffix.lower() not in TEXT_EXTS:
-            continue
-        try:
-            rel = p.resolve().relative_to(settings_root.resolve()).as_posix()
-        except ValueError:
-            continue
-        if _should_skip(rel):
-            continue
-        score = _priority(rel)
-        if score < 0:
-            continue
-        # mtime 微调：越新略优先
-        try:
-            score += min(10, int(p.stat().st_mtime) % 10)
-        except OSError:
-            pass
-        cands.append((score, rel, p))
+    skip_names = SKIP_DIR_PARTS | IGNORE_NAMES
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = [
+            n for n in dirnames if n not in skip_names and not n.startswith(".")
+        ]
+        for name in filenames:
+            p = Path(dirpath) / name
+            if p.suffix.lower() not in TEXT_EXTS:
+                continue
+            try:
+                rel = p.relative_to(settings_root).as_posix()
+            except ValueError:
+                continue
+            if _should_skip(rel):
+                continue
+            score = _priority(rel)
+            if score < 0:
+                continue
+            try:
+                score += min(10, int(p.stat().st_mtime) % 10)
+            except OSError:
+                pass
+            cands.append((score, rel, p))
     cands.sort(key=lambda x: (-x[0], x[1]))
     return cands[: max(1, min(limit, 2000))]
 

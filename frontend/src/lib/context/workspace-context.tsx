@@ -10,6 +10,7 @@ import {
 } from "react";
 import { api } from "@/lib/api";
 import { DEFAULT_WORKSPACE_SLUG, paths } from "@/lib/paths";
+import { STATIC_WORKSPACE_SLUGS } from "@/lib/workspace-slugs";
 import type { WorkspaceInfo } from "@/lib/types";
 
 interface WorkspaceContextValue {
@@ -75,5 +76,8 @@ export function useWorkspacePaths() {
 export function getLastWorkspaceSlug(): string {
   if (typeof document === "undefined") return DEFAULT_WORKSPACE_SLUG;
   const match = document.cookie.match(/(?:^|;\s*)last_workspace_slug=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : DEFAULT_WORKSPACE_SLUG;
+  const slug = match ? decodeURIComponent(match[1]).trim() : "";
+  if (!slug) return DEFAULT_WORKSPACE_SLUG;
+  if ((STATIC_WORKSPACE_SLUGS as readonly string[]).includes(slug)) return slug;
+  return DEFAULT_WORKSPACE_SLUG;
 }

@@ -1,9 +1,12 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import { DEFAULT_WORKSPACE_SLUG } from "@/lib/paths";
+"use client";
 
-export default async function Home() {
-  const jar = await cookies();
-  const slug = jar.get("last_workspace_slug")?.value || DEFAULT_WORKSPACE_SLUG;
-  redirect(`/${slug}/tasks`);
+import { useEffect } from "react";
+import { getLastWorkspaceSlug } from "@/lib/context/workspace-context";
+import { paths } from "@/lib/paths";
+
+export default function Home() {
+  useEffect(() => {
+    window.location.replace(paths.root(getLastWorkspaceSlug()));
+  }, []);
+  return <p className="p-6 text-sm text-slate-400">正在进入工作区…</p>;
 }

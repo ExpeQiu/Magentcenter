@@ -2,15 +2,15 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { api } from "@/lib/api";
+import { useSearchParams } from "next/navigation";
+import { API_BASE, api } from "@/lib/api";
 import { useWorkspacePaths } from "@/lib/context/workspace-context";
 import type { StreamEvent, TaskInfo } from "@/lib/types";
 import { StatusBadge } from "@/components/ui/status-badge";
 
 export function TaskDetailView() {
-  const params = useParams();
-  const taskId = params.id as string;
+  const params = useSearchParams();
+  const taskId = (params.get("id") || "").trim();
   const wp = useWorkspacePaths();
   const [task, setTask] = useState<TaskInfo | null>(null);
   const [events, setEvents] = useState<StreamEvent[]>([]);
@@ -19,6 +19,7 @@ export function TaskDetailView() {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    if (!taskId) return;
     api.task(taskId).then((t) => {
       setTask(t);
       setStartDate(t.start_date || "");
@@ -27,7 +28,8 @@ export function TaskDetailView() {
   }, [taskId]);
 
   useEffect(() => {
-    const es = new EventSource(`/api/tasks/${taskId}/stream`);
+    if (!taskId) return;
+    const es = new EventSource(`${API_BASE}/api/tasks/${encodeURIComponent(taskId)}/stream`);
     const handler = (type: string) => (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data) as StreamEvent;

@@ -130,6 +130,9 @@ def create_app() -> FastAPI:
     app.include_router(outputs.router)
     app.include_router(system.router)
     app.include_router(ws.router)
+    from app.core.static_ui import mount_static_ui
+
+    mount_static_ui(app)
     return app
 
 

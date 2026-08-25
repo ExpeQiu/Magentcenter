@@ -202,11 +202,18 @@ export interface OutputFile {
   previewable?: boolean;
 }
 
+export interface OutputExtraRoot {
+  name: string;
+  readable: boolean;
+  message?: string;
+}
+
 export interface OutputStatus {
   status: string;
   readable: boolean;
   root_name: string;
   message: string;
+  extra_roots?: OutputExtraRoot[];
 }
 
 export interface SkillDetail extends SkillInfo {

@@ -43,14 +43,30 @@ function errorMessageFromBody(text: string, status: number): string {
   return text;
 }
 
+const REQUEST_TIMEOUT_MS = 20_000;
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${url}`, init);
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(errorMessageFromBody(text, res.status));
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${API_BASE}${url}`, {
+      ...init,
+      signal: init?.signal ?? ctrl.signal,
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => "");
+      throw new Error(errorMessageFromBody(text, res.status));
+    }
+    if (res.status === 204) return undefined as T;
+    return res.json();
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") {
+      throw new Error(`请求超时：${url}`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
   }
-  if (res.status === 204) return undefined as T;
-  return res.json();
 }
 
 export const api = {

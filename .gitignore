@@ -12,6 +12,10 @@ desktop/dist/
 desktop/.npm-cache/
 desktop/resources/runtime/
 desktop/resources/*.tar.gz
+desktop/src-tauri/target/
+desktop/src-tauri/runtime/
+desktop/src-tauri/gen/
+frontend/out/
 __pycache__/
 *.pyc
 .DS_Store

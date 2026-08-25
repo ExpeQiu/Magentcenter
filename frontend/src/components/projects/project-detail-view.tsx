@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import { useWorkspacePaths } from "@/lib/context/workspace-context";
 import type { ProjectInfo } from "@/lib/types";
@@ -12,8 +12,8 @@ import { ProjectLeadPicker } from "@/components/pickers/project-lead-picker";
 import { ProjectResourcesSection } from "@/components/projects/project-resources-section";
 
 export function ProjectDetailView() {
-  const params = useParams();
-  const projectId = params.id as string;
+  const params = useSearchParams();
+  const projectId = (params.get("id") || "").trim();
   const wp = useWorkspacePaths();
   const [project, setProject] = useState<ProjectInfo | null>(null);
   const { openCreateTask } = useModal();
@@ -22,6 +22,7 @@ export function ProjectDetailView() {
     api.project(projectId).then(setProject).catch(console.error);
 
   useEffect(() => {
+    if (!projectId) return;
     reload();
   }, [projectId]);
 

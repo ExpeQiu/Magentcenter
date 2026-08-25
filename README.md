@@ -65,6 +65,7 @@ echo "AI_MOCK_MODE=true" >> .env
 - `ALERT_PROFILE=default` — 告警规则环境
 - `OPENCLAW_*` / `HERMES_*` — 各栈可执行文件与超时
 - `OUTPUTS_VAULT_ROOT` — Obsidian expe 库根（控制台「输出物」范围选择起点）
+- `OUTPUTS_VAULT_EXTRA` — 额外只读根（逗号分隔绝对路径，以文件夹名出现在一级目录）
 
 ## CLI
 
@@ -100,17 +101,23 @@ echo "AI_MOCK_MODE=true" >> .env
 - `./scripts/stop.sh` — 停止后端+前端
 - `./scripts/status.sh` — 检查服务状态
 - `./scripts/verify.sh` — 冒烟验证
-- `./scripts/package-dmg.sh` — 打包 macOS DMG（输出 `dist/AgentCenter-*.dmg`）
+- `./scripts/package-dmg.sh` — 打包 macOS DMG（Tauri 2；输出 `dist/AgentCenter_*.dmg`）
 
-## 桌面安装包（macOS）
+## 桌面安装包（macOS / Tauri 2）
 
 ```bash
 ./scripts/package-dmg.sh
 ```
 
-打开生成的 `dist/AgentCenter-0.2.0-mac-arm64.dmg`，把 **AgentCenter** 拖进「应用程序」。首次打开若被拦截：右键图标 → 打开。
+打开生成的 `dist/AgentCenter_*.dmg`，把 **AgentCenter** 拖进「应用程序」。首次打开若被拦截：右键图标 → 打开。
 
-数据与配置在 `~/Library/Application Support/AgentCenter/`，日志在 `~/Library/Logs/AgentCenter/`。打包日志：`logs/package-dmg.log`。
+打包形态：
+
+- 原生窗口；前端是 Next 静态页，运行时无 Node
+- FastAPI sidecar 提供 API 与页面；关掉窗口会停掉 API
+- 密钥不进包；安装后读 `~/Library/Application Support/AgentCenter/.env`（没有则从 `.env.example` 复制）
+
+数据在 `~/Library/Application Support/AgentCenter/`，日志在 `~/Library/Logs/AgentCenter/`。打包日志：`logs/package-dmg.log`。
 
 ## Phase 3 API
 

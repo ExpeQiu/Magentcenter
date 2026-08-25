@@ -1,0 +1,14 @@
+[package]
+name = "agentcenter"
+version = "0.3.0"
+description = "AgentCenter 桌面端（Tauri 2 + FastAPI sidecar）"
+authors = ["AgentCenter"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+libc = "0.2"
+tauri = { version = "2", features = [] }
+ureq = "2"

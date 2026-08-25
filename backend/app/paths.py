@@ -1,6 +1,6 @@
 """Repo vs packaged-app path resolution.
 
-Packaged Electron sets AGENTCENTER_* env vars; local scripts leave them unset
+Packaged Tauri sets AGENTCENTER_* env vars; local scripts leave them unset
 so paths stay relative to the git checkout.
 """
 
@@ -8,6 +8,23 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+
+DEFAULT_WORKSPACE_SLUG = "cyber"
+LEGACY_PREFIXES = frozenset(
+    {
+        "tasks",
+        "projects",
+        "agents",
+        "squads",
+        "autopilots",
+        "skills",
+        "kanban",
+        "system",
+        "sessions",
+        "knowledge",
+        "outputs",
+    }
+)
 
 
 def repo_root() -> Path:

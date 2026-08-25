@@ -6,6 +6,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Query
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel
 
 from app.core.outputs_vault import (
@@ -44,11 +45,18 @@ class OutputFileOut(BaseModel):
     previewable: bool = True
 
 
+class ExtraRootOut(BaseModel):
+    name: str
+    readable: bool
+    message: str = ""
+
+
 class OutputStatusOut(BaseModel):
     status: str
     readable: bool
     root_name: str = ""
     message: str = ""
+    extra_roots: list[ExtraRootOut] = []
 
 
 def _fmt_mtime(ts: float) -> str:
@@ -112,7 +120,8 @@ async def outputs_recent(
         scope_list or "all",
     )
     try:
-        entries = list_recent(
+        entries = await run_in_threadpool(
+            list_recent,
             limit=limit,
             source=source,
             q=q,
@@ -121,6 +130,9 @@ async def outputs_recent(
         )
     except OutputsVaultError as exc:
         _raise(exc)
+        return []
+    except Exception:
+        logger.exception("outputs recent failed scopes=%s", scope_list or "all")
         return []
     return [_entry_out(e) for e in entries]
 

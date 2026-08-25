@@ -123,6 +123,7 @@ check "输出物状态" "curl -sf '$BASE_URL/api/outputs/status' | python3 -c \"
 if curl -sf "$BASE_URL/api/outputs/status" | python3 -c "import sys,json; d=json.load(sys.stdin); raise SystemExit(0 if d.get('readable') else 1)"; then
   check "输出物目录" "curl -sf '$BASE_URL/api/outputs/tree' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert isinstance(d,list)\""
   check "输出物路径穿越拒绝" "code=\$(curl -s -o /dev/null -w '%{http_code}' '$BASE_URL/api/outputs/tree?path=../'); [[ \$code == 400 ]]"
+  check "额外 vault 根" "curl -sf '$BASE_URL/api/outputs/status' | python3 -c \"import sys,json; d=json.load(sys.stdin); extras=d.get('extra_roots') or []; assert isinstance(extras,list); names={x.get('name') for x in extras if x.get('readable')}; import os; tree=os.popen('curl -sf $BASE_URL/api/outputs/tree').read(); t=json.loads(tree) if names else []; tn={x.get('name') for x in t}; assert names <= tn, (names, tn)\""
 else
   echo "[verify] 输出物 vault 不可读，跳过 tree/穿越检查"
 fi

@@ -120,9 +120,18 @@ export function OutputsPage() {
   const [scopes, setScopes] = useState<string[]>([]);
   const [scopeOpen, setScopeOpen] = useState(false);
 
+  const extraNames = useMemo(
+    () =>
+      (status?.extra_roots || [])
+        .filter((x) => x.readable)
+        .map((x) => x.name),
+    [status]
+  );
+  const extraKey = extraNames.join("|");
+
   useEffect(() => {
-    setScopes(loadScopes());
-  }, []);
+    setScopes(loadScopes(extraNames));
+  }, [extraKey]);
 
   const crumbs = useMemo(() => {
     if (!dirPath) return [] as { label: string; path: string }[];
@@ -163,6 +172,7 @@ export function OutputsPage() {
       status: "unavailable",
       readable: false,
       root_name: "",
+      extra_roots: [],
       message:
         `${detail}。请用系统浏览器打开 http://127.0.0.1:3013（勿用 Cursor 内置预览），` +
         "并确认后端 http://127.0.0.1:8013/api/health 与 ./scripts/start.sh 已启动。",
@@ -233,7 +243,8 @@ export function OutputsPage() {
     } catch (err) {
       console.error(err);
       setEntries([]);
-      setMsg("加载失败");
+      const detail = err instanceof Error ? err.message : String(err);
+      setMsg(detail ? `加载失败：${detail}` : "加载失败");
     } finally {
       setLoading(false);
     }
@@ -282,8 +293,9 @@ export function OutputsPage() {
     void openFile(e.path);
   };
 
+  const extraLabel = extraNames.length ? ` + ${extraNames.join(" · ")}` : "";
   const vaultLabel = status?.root_name
-    ? `vault · ${status.root_name}`
+    ? `vault · ${status.root_name}${extraLabel}`
     : "OpenClaw / Hermes 文档产出";
 
   if (status && !status.readable) {

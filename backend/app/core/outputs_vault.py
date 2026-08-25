@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 
 from app.config import Settings, get_settings
@@ -23,6 +24,8 @@ IGNORE_NAMES = frozenset(
         "__pycache__",
         "node_modules",
         ".trash",
+        ".venv",
+        "venv",
     }
 )
 
@@ -109,9 +112,15 @@ class VaultFile:
     previewable: bool = True
 
 
+def _unescape_fs_path(raw: str) -> str:
+    """去掉 shell 转义（如 Mobile\\ Documents、com\\~apple）。"""
+    s = (raw or "").strip().strip('"').strip("'")
+    return s.replace("\\ ", " ").replace("\\~", "~")
+
+
 def _vault_root(settings: Settings | None = None) -> Path:
     s = settings or get_settings()
-    raw = (s.outputs_vault_root or "").strip().strip('"').strip("'")
+    raw = _unescape_fs_path(s.outputs_vault_root or "")
     if not raw:
         raise OutputsVaultError("OUTPUTS_VAULT_ROOT 未配置", status_code=503)
     root = Path(raw).expanduser()
@@ -121,15 +130,107 @@ def _vault_root(settings: Settings | None = None) -> Path:
     return root.resolve()
 
 
+def _split_extra_raw(raw: str) -> list[str]:
+    text = _unescape_fs_path(raw)
+    if not text:
+        return []
+    chunks: list[str] = []
+    for piece in text.replace(";", "\n").replace(",", "\n").splitlines():
+        p = _unescape_fs_path(piece)
+        if p:
+            chunks.append(p)
+    return chunks
+
+
+@lru_cache(maxsize=16)
+def _cached_extra_specs(
+    primary_raw: str, extra_raw: str
+) -> tuple[tuple[str, bool, str, str], ...]:
+    """(name, readable, path, message) 缓存；配置变更或进程重启后失效。"""
+    primary: Path | None = None
+    if primary_raw:
+        p = Path(primary_raw).expanduser()
+        if p.is_dir():
+            primary = p.resolve()
+
+    used_names: set[str] = set(_EXPE_TOP_LEVEL)
+    rows: list[tuple[str, bool, str, str]] = []
+    for raw in _split_extra_raw(extra_raw):
+        path = Path(raw).expanduser()
+        readable = path.is_dir()
+        resolved = path.resolve() if readable else path
+        if primary is not None and readable:
+            if resolved == primary:
+                logger.warning("outputs extra skipped (same as primary) path=%s", resolved)
+                continue
+            try:
+                resolved.relative_to(primary)
+                logger.warning("outputs extra skipped (inside primary) path=%s", resolved)
+                continue
+            except ValueError:
+                pass
+            try:
+                primary.relative_to(resolved)
+                logger.warning("outputs extra skipped (contains primary) path=%s", resolved)
+                continue
+            except ValueError:
+                pass
+
+        base = path.name.strip() or "extra"
+        alias = base
+        n = 2
+        while alias in used_names or (
+            primary is not None and (primary / alias).exists()
+        ):
+            alias = f"{base}_{n}"
+            n += 1
+        used_names.add(alias)
+        msg = "" if readable else f"额外目录不可读: {path.name}"
+        rows.append((alias, readable, str(resolved), msg))
+        if readable:
+            logger.info("outputs extra root alias=%s path=%s", alias, resolved)
+        else:
+            logger.warning("outputs extra missing alias=%s path=%s", alias, path)
+    return tuple(rows)
+
+
+def extra_vault_specs(settings: Settings | None = None) -> list[dict]:
+    """配置里的额外根（含不可读项），供 status 展示。"""
+    s = settings or get_settings()
+    rows = _cached_extra_specs(
+        _unescape_fs_path(s.outputs_vault_root or ""),
+        s.outputs_vault_extra or "",
+    )
+    return [
+        {"name": n, "readable": r, "path": p, "message": m}
+        for n, r, p, m in rows
+    ]
+
+
+def extra_vault_roots(settings: Settings | None = None) -> dict[str, Path]:
+    """可读额外根：alias -> 绝对路径。"""
+    out: dict[str, Path] = {}
+    for spec in extra_vault_specs(settings):
+        if spec["readable"]:
+            out[spec["name"]] = Path(spec["path"])
+    return out
+
+
 def vault_status(settings: Settings | None = None) -> dict:
     s = settings or get_settings()
-    raw = (s.outputs_vault_root or "").strip().strip('"').strip("'")
+    raw = _unescape_fs_path(s.outputs_vault_root or "")
+    extras = extra_vault_specs(s)
+    extra_public = [
+        {"name": x["name"], "readable": x["readable"], "message": x["message"]}
+        for x in extras
+    ]
     if not raw:
         return {
             "status": "unavailable",
             "readable": False,
             "root_name": "",
             "message": "OUTPUTS_VAULT_ROOT 未配置",
+            "extra_roots": extra_public,
         }
     root = Path(raw).expanduser()
     readable = root.is_dir()
@@ -138,6 +239,7 @@ def vault_status(settings: Settings | None = None) -> dict:
         "readable": readable,
         "root_name": root.name if raw else "",
         "message": "" if readable else f"vault 路径不存在: {root.name}",
+        "extra_roots": extra_public,
     }
 
 
@@ -150,13 +252,26 @@ def infer_source(rel: str) -> str:
 
 
 def resolve_safe(rel: str, settings: Settings | None = None) -> Path:
-    """将相对路径解析到 vault 内；拒绝逃逸。"""
-    root = _vault_root(settings)
+    """将相对路径解析到主库或额外根内；拒绝逃逸。"""
     cleaned = (rel or "").replace("\\", "/").strip("/")
-    if cleaned in ("", "."):
-        return root
     if ".." in cleaned.split("/"):
         raise OutputsVaultError("非法路径", status_code=400)
+    extras = extra_vault_roots(settings)
+    if cleaned and cleaned != ".":
+        first, _, rest = cleaned.partition("/")
+        extra_root = extras.get(first)
+        if extra_root is not None:
+            candidate = extra_root if not rest else (extra_root / rest).resolve()
+            if not rest:
+                return extra_root
+            try:
+                candidate.relative_to(extra_root)
+            except ValueError as exc:
+                raise OutputsVaultError("非法路径", status_code=400) from exc
+            return candidate
+    root = _vault_root(settings)
+    if cleaned in ("", "."):
+        return root
     candidate = (root / cleaned).resolve()
     try:
         candidate.relative_to(root)
@@ -175,13 +290,15 @@ def _clean_rel(rel: str) -> str:
     return (rel or "").replace("\\", "/").strip().strip("/")
 
 
-def legacy_openclaw_rel(rel: str) -> str | None:
+def legacy_openclaw_rel(
+    rel: str, settings: Settings | None = None
+) -> str | None:
     """若路径仍是旧 openclaw 根下的相对路径，返回加前缀后的路径。"""
     cleaned = _clean_rel(rel)
     if not cleaned:
         return None
     first = cleaned.split("/", 1)[0]
-    if first in _EXPE_TOP_LEVEL:
+    if first in _EXPE_TOP_LEVEL or first in extra_vault_roots(settings):
         return None
     return f"openclaw/{cleaned}"
 
@@ -208,7 +325,7 @@ def resolve_path(
     if ok:
         return primary
 
-    alt_rel = legacy_openclaw_rel(cleaned)
+    alt_rel = legacy_openclaw_rel(cleaned, settings)
     if not alt_rel:
         return primary
     try:
@@ -233,8 +350,44 @@ def resolve_path(
     return primary
 
 
-def _rel_str(root: Path, path: Path) -> str:
-    return path.relative_to(root).as_posix()
+def _logical_rel(
+    path: Path,
+    settings: Settings | None = None,
+    extras: dict[str, Path] | None = None,
+) -> str | None:
+    """绝对路径 → 逻辑相对路径。库外符号链接返回 None。"""
+    mapping = extras if extras is not None else extra_vault_roots(settings)
+    roots: list[tuple[str, Path]] = [(alias, extra) for alias, extra in mapping.items()]
+    try:
+        primary = _vault_root(settings)
+        roots.append(("", primary))
+    except OutputsVaultError:
+        primary = None
+
+    def _rel_to(candidate: Path) -> str | None:
+        for alias, extra_root in roots:
+            try:
+                rel = candidate.relative_to(extra_root)
+            except ValueError:
+                continue
+            rel_s = rel.as_posix()
+            if alias:
+                return alias if rel_s in ("", ".") else f"{alias}/{rel_s}"
+            return rel_s
+        return None
+
+    # 先按展示路径（不跟随 symlink），避免链到库外
+    hit = _rel_to(path)
+    if hit is not None:
+        return hit
+    try:
+        resolved = path.resolve()
+    except OSError:
+        return None
+    hit = _rel_to(resolved)
+    if hit is None:
+        logger.warning("outputs skip escaped path=%s resolved=%s", path, resolved)
+    return hit
 
 
 def _should_ignore(name: str) -> bool:
@@ -263,7 +416,7 @@ def _looks_binary(sample: bytes) -> bool:
 
 def list_dir(rel: str = "", settings: Settings | None = None) -> list[VaultEntry]:
     t0 = time.perf_counter()
-    root = _vault_root(settings)
+    extras = extra_vault_roots(settings)
     target = resolve_path(rel, settings, expect="dir")
     if not target.is_dir():
         logger.warning("outputs list_dir missing rel=%r", _clean_rel(rel))
@@ -283,7 +436,9 @@ def list_dir(rel: str = "", settings: Settings | None = None) -> list[VaultEntry
             st = child.stat()
         except OSError:
             continue
-        rel_path = _rel_str(root, child)
+        rel_path = _logical_rel(child, settings, extras=extras)
+        if not rel_path:
+            continue
         if child.is_dir():
             entries.append(
                 VaultEntry(
@@ -309,6 +464,29 @@ def list_dir(rel: str = "", settings: Settings | None = None) -> list[VaultEntry
                 )
             )
 
+    cleaned_rel = _clean_rel(rel)
+    if not cleaned_rel:
+        existing = {e.path for e in entries}
+        for alias, extra_root in extras.items():
+            if alias in existing:
+                continue
+            try:
+                st = extra_root.stat()
+            except OSError:
+                continue
+            entries.append(
+                VaultEntry(
+                    name=alias,
+                    path=alias,
+                    kind="dir",
+                    source=infer_source(alias),
+                    mtime=st.st_mtime,
+                    size=0,
+                    ext="",
+                )
+            )
+        entries.sort(key=lambda e: (e.kind != "dir", e.name.lower()))
+
     ms = (time.perf_counter() - t0) * 1000
     logger.info(
         "outputs list_dir rel=%r entries=%d elapsed_ms=%.1f",
@@ -319,16 +497,25 @@ def list_dir(rel: str = "", settings: Settings | None = None) -> list[VaultEntry
     return entries
 
 
-def normalize_scopes(scopes: list[str] | None) -> list[str]:
-    """去重、规范化相对路径；保持用户选择顺序。"""
+def normalize_scopes(
+    scopes: list[str] | None, settings: Settings | None = None
+) -> list[str]:
+    """去重、规范化相对路径；保持用户选择顺序。
+
+    旧前端会把额外根误写成 openclaw/<extra>，这里还原。
+    """
     if not scopes:
         return []
+    extras = extra_vault_roots(settings)
     seen: set[str] = set()
     out: list[str] = []
     for raw in scopes:
         cleaned = (raw or "").replace("\\", "/").strip().strip("/")
         if not cleaned or ".." in cleaned.split("/"):
             continue
+        parts = cleaned.split("/")
+        if parts[0] == "openclaw" and len(parts) >= 2 and parts[1] in extras:
+            cleaned = "/".join(parts[1:])
         if cleaned in seen:
             continue
         seen.add(cleaned)
@@ -350,9 +537,12 @@ def resolve_scope_dirs(
         if not path.is_dir():
             logger.warning("outputs scope not a dir skipped scope=%r", rel)
             continue
-        # 返回实际相对路径（可能已加 openclaw/）
-        root = _vault_root(settings)
-        resolved.append((_rel_str(root, path), path))
+        # 返回逻辑相对路径（额外根带 alias）
+        logical = _logical_rel(path, settings)
+        if not logical:
+            logger.warning("outputs scope escaped skipped scope=%r", rel)
+            continue
+        resolved.append((logical, path))
     return resolved
 
 
@@ -395,10 +585,14 @@ def list_recent(
             )
             return []
     else:
+        extras = extra_vault_roots(settings)
         start_dirs = [("/", root)]
+        for alias, extra_root in extras.items():
+            start_dirs.append((alias, extra_root))
 
     found: list[VaultEntry] = []
     scanned = 0
+    extras = extra_vault_roots(settings)
 
     def walk(dir_path: Path, depth: int) -> None:
         nonlocal scanned
@@ -415,12 +609,17 @@ def list_recent(
                 continue
             try:
                 if child.is_dir():
+                    if child.is_symlink():
+                        logger.info("outputs skip symlink dir path=%s", child)
+                        continue
                     walk(child, depth + 1)
                     continue
                 if not child.is_file():
                     continue
                 scanned += 1
-                rel_path = _rel_str(root, child)
+                rel_path = _logical_rel(child, settings, extras=extras)
+                if not rel_path:
+                    continue
                 src = infer_source(rel_path)
                 if source_filter and src != source_filter:
                     continue
@@ -440,7 +639,7 @@ def list_recent(
                         ext=child.suffix.lower().lstrip("."),
                     )
                 )
-            except OSError:
+            except (OSError, ValueError, TypeError):
                 continue
 
     for _rel, start in start_dirs:
@@ -464,7 +663,6 @@ def list_recent(
 
 def read_file(rel: str, settings: Settings | None = None) -> VaultFile:
     t0 = time.perf_counter()
-    root = _vault_root(settings)
     path = resolve_path(rel, settings, expect="file")
     if not path.is_file():
         logger.warning("outputs read_file missing rel=%r", _clean_rel(rel))
@@ -476,7 +674,9 @@ def read_file(rel: str, settings: Settings | None = None) -> VaultFile:
     if st.st_size > MAX_FILE_BYTES:
         raise OutputsVaultError("文件过大", status_code=413)
 
-    rel_path = _rel_str(root, path)
+    rel_path = _logical_rel(path, settings)
+    if not rel_path:
+        raise OutputsVaultError("非法路径", status_code=400)
     src = infer_source(rel_path)
     ext = path.suffix.lower().lstrip(".")
     content = ""

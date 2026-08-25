@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { api } from "@/lib/api";
 import type { SessionDetail } from "@/lib/types";
 import { formatTime } from "@/components/ui/status-badge";
@@ -30,9 +30,9 @@ const ROLE_LABELS: Record<string, string> = {
 };
 
 export function SessionDetailView() {
-  const params = useParams();
+  const params = useSearchParams();
   const router = useRouter();
-  const sessionId = params.id as string;
+  const sessionId = (params.get("id") || "").trim();
 
   const [detail, setDetail] = useState<SessionDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -41,6 +41,7 @@ export function SessionDetailView() {
   const [indexMsg, setIndexMsg] = useState("");
 
   useEffect(() => {
+    if (!sessionId) return;
     api
       .sessionDetail(sessionId)
       .then(setDetail)

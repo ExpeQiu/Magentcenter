@@ -22,8 +22,10 @@ const KIND_OPTIONS: { value: string; label: string }[] = [
   { value: "archive", label: "Archive 原文" },
 ];
 
+const EMPTY_HITS: KnowledgeHit[] = [];
+
 export function KnowledgePage({
-  initialHits = [],
+  initialHits = EMPTY_HITS,
 }: {
   initialHits?: KnowledgeHit[];
 }) {
@@ -64,15 +66,13 @@ export function KnowledgePage({
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[knowledge] list failed", err);
-      setLoadError(
-        `加载失败: ${detail}。请确认后端 8013 已启动，并用系统浏览器打开 http://127.0.0.1:3013`
-      );
+      setLoadError(`加载失败: ${detail}`);
       setMsg("加载知识库失败");
-      setHits((prev) => (prev.length ? prev : initialHits));
+      setHits((prev) => (prev.length ? prev : EMPTY_HITS));
     } finally {
       setSearching(false);
     }
-  }, [kind, runtime, initialHits]);
+  }, [kind, runtime]);
 
   useEffect(() => {
     api

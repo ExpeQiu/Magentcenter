@@ -1,4 +1,11 @@
 import { WorkspaceProvider } from "@/lib/context/workspace-context";
+import { workspaceStaticParams } from "@/lib/workspace-slugs";
+
+export function generateStaticParams() {
+  return workspaceStaticParams();
+}
+
+export const dynamicParams = false;
 
 export default async function WorkspaceLayout({
   children,

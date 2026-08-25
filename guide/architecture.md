@@ -64,11 +64,12 @@
 
 ## 配置
 
-见 `.env.example`：`RUNTIMES` / `DEFAULT_RUNTIME` / `HERMES_*` / `OPENCLAW_*` / `OUTPUTS_VAULT_ROOT`。
+见 `.env.example`：`RUNTIMES` / `DEFAULT_RUNTIME` / `HERMES_*` / `OPENCLAW_*` / `OUTPUTS_VAULT_ROOT` / `OUTPUTS_VAULT_EXTRA`。
 
 ### 输出物（Outputs）
 
-- 控制台页 `/{workspace}/outputs`：只读索引 Obsidian `expe` 库（默认 `…/Documents/expe`）；「定义范围」从一级目录（Document / Github / openclaw 等）逐级勾选
+- 控制台页 `/{workspace}/outputs`：只读索引 Obsidian `expe` 库（默认 `…/Documents/expe`）；`OUTPUTS_VAULT_EXTRA` 可追加 iCloud/本地目录，以文件夹名出现在一级
+- 「定义范围」从一级目录（Document / Github / openclaw / 额外根 等）逐级勾选
 - 列表：全部普通文件；跳过 `.obsidian` / `.git` 等系统目录
 - 预览：Markdown 渲染；其它文本原文；二进制仅展示元信息
 - API：`GET /api/outputs/{status,tree,recent,file}`；路径逃逸拒绝
@@ -99,4 +100,5 @@
 - **Phase 10**：可选 Embedding HTTP；告警多环境 profile；知识库独立页
 - **Phase 11**：输出物 Tab（vault 目录/最近/预览）
 - **Phase 12（当前）**：知识库内容模型（卡片蒸馏 + 任务前注入 + workspace 字段 + 划界文档）
-- **Phase 13（下一步）**：Outputs→ArtifactRef 批量建指；Embedding 批量重嵌入；告警 profile 导入导出；卡片质量评分
+- **Phase 13**：桌面端 Tauri 2 DMG（静态前端 + FastAPI sidecar，见 ADR-002）
+- **Phase 14（下一步）**：Outputs→ArtifactRef 批量建指；Embedding 批量重嵌入；告警 profile 导入导出；卡片质量评分

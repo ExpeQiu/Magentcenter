@@ -15,26 +15,31 @@ const EXPE_TOP_LEVEL = new Set([
   "综合附件区",
 ]);
 
-function migrateScopePath(raw: string): string {
+function migrateScopePath(raw: string, extraRootNames: Set<string> = new Set()): string {
   const cleaned = raw.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "");
   if (!cleaned) return "";
-  const first = cleaned.split("/")[0];
-  if (EXPE_TOP_LEVEL.has(first)) return cleaned;
+  const parts = cleaned.split("/").filter(Boolean);
+  const first = parts[0];
+  if (EXPE_TOP_LEVEL.has(first) || extraRootNames.has(first)) return cleaned;
+  if (first === "openclaw" && parts[1] && extraRootNames.has(parts[1])) {
+    return parts.slice(1).join("/");
+  }
   return `openclaw/${cleaned}`;
 }
 
-export function loadScopes(): string[] {
+export function loadScopes(extraRootNames: string[] = []): string[] {
   if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(OUTPUTS_SCOPES_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
+    const extra = new Set(extraRootNames);
     const migrated = [
       ...new Set(
         parsed
           .filter((x): x is string => typeof x === "string")
-          .map(migrateScopePath)
+          .map((s) => migrateScopePath(s, extra))
           .filter(Boolean)
       ),
     ];
@@ -141,7 +146,7 @@ export function ScopeModal({
           <div>
             <h2 className="text-lg font-semibold text-slate-100">定义范围</h2>
             <p className="mt-0.5 text-xs text-slate-500">
-              根目录为 Obsidian expe；一级为 Document / Github / openclaw 等，可逐级勾选。空=整库。
+              根目录为 Obsidian expe，另可挂 iCloud/本地额外文件夹；可逐级勾选。空=整库。
             </p>
           </div>
           <button

@@ -1,0 +1,9 @@
+{
+  "identifier": "default",
+  "description": "主窗口",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:8013/*"]
+  },
+  "permissions": ["core:default"]
+}
