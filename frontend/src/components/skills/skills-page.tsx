@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import type { SkillDetail, SkillInfo, TaskInfo } from "@/lib/types";
+import type { SkillDetail, SkillInfo, SkillCapture, TaskInfo } from "@/lib/types";
 import { useWorkspacePaths } from "@/lib/context/workspace-context";
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
+import { ContentPathEditor } from "@/components/settings/content-path-editor";
 
 type AuditVerdict = "pass" | "revise" | "reject" | "pending";
 
@@ -19,6 +20,15 @@ interface AuditRecord {
 type AuditMap = Record<string, AuditRecord>;
 
 const AUDIT_STORAGE_KEY = "agentcenter.skill-audits";
+type SkillRuntime = "openclaw" | "hermes" | "catalog";
+const CATALOG_CATEGORIES = [
+  "engineering",
+  "productivity",
+  "research",
+  "domain",
+  "misc",
+  "in-progress",
+];
 
 function loadAudits(): AuditMap {
   if (typeof window === "undefined") return {};
@@ -74,12 +84,13 @@ function isTerminal(status: string): boolean {
 
 export function SkillsPage() {
   const [skills, setSkills] = useState<SkillInfo[]>([]);
+  const [captures, setCaptures] = useState<SkillCapture[]>([]);
+  const [drafts, setDrafts] = useState<SkillInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [ownerFilter, setOwnerFilter] = useState("all");
   const [modeFilter, setModeFilter] = useState<"all" | "auto" | "manual">("all");
-  const [runtimeFilter, setRuntimeFilter] = useState<"all" | "openclaw" | "hermes">(
-    "all"
-  );
+  const [runtimeFilter, setRuntimeFilter] = useState<"all" | SkillRuntime>("all");
+  const [categoryFilter, setCategoryFilter] = useState("all");
   const [includeArchived, setIncludeArchived] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -91,9 +102,7 @@ export function SkillsPage() {
   const [installTask, setInstallTask] = useState<TaskInfo | null>(null);
   const [installMsg, setInstallMsg] = useState("");
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [selectedRuntime, setSelectedRuntime] = useState<"openclaw" | "hermes">(
-    "openclaw"
-  );
+  const [selectedRuntime, setSelectedRuntime] = useState<SkillRuntime>("openclaw");
   const [detail, setDetail] = useState<SkillDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [audits, setAudits] = useState<AuditMap>({});
@@ -105,11 +114,25 @@ export function SkillsPage() {
     if (!silent) setLoading(true);
     else setRefreshing(true);
     try {
-      const list = await api.skills({
-        includeArchived,
-        runtime: runtimeFilter,
-      });
-      setSkills(list);
+      const [list, mined, draftList] = await Promise.all([
+        api.skills({
+          includeArchived,
+          runtime: runtimeFilter,
+        }),
+        api.skillCaptured(
+          runtimeFilter === "openclaw" || runtimeFilter === "hermes" ? runtimeFilter : "all"
+        ).catch((err) => {
+          console.error("skill captured load failed", err);
+          return [] as SkillCapture[];
+        }),
+        api.skills({
+          includeDraft: true,
+          runtime: runtimeFilter,
+        }),
+      ]);
+      setSkills(list.filter((s) => s.status !== "draft"));
+      setCaptures(mined.filter((item) => !item.refined));
+      setDrafts(draftList.filter((s) => s.status === "draft"));
     } catch (err) {
       console.error("skills load failed", err);
     } finally {
@@ -213,6 +236,7 @@ export function SkillsPage() {
     return skills.filter((s) => {
       if (runtimeFilter !== "all" && (s.runtime || "openclaw") !== runtimeFilter)
         return false;
+      if (categoryFilter !== "all" && (s.category || "") !== categoryFilter) return false;
       if (ownerFilter !== "all" && (s.owner || "") !== ownerFilter) return false;
       if (modeFilter === "auto" && s.disable_model_invocation) return false;
       if (modeFilter === "manual" && !s.disable_model_invocation) return false;
@@ -224,13 +248,14 @@ export function SkillsPage() {
         s.description,
         s.description_full || "",
         s.owner || "",
+        s.category || "",
         ...(s.allowed_tools || []),
       ]
         .join(" ")
         .toLowerCase();
       return hay.includes(q);
     });
-  }, [skills, filter, ownerFilter, modeFilter, runtimeFilter]);
+  }, [skills, filter, ownerFilter, modeFilter, runtimeFilter, categoryFilter]);
 
   const install = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -282,6 +307,32 @@ export function SkillsPage() {
     }
   };
 
+  const refineCapture = async (captureId: string) => {
+    setActionBusy(`refine:${captureId}`);
+    try {
+      await api.skillRefine(captureId);
+      await load(true);
+    } catch (err) {
+      console.error("skill refine failed", err);
+      alert("提炼失败");
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
+  const verifyDraft = async (skillId: string, runtime: "openclaw" | "hermes" = "openclaw") => {
+    setActionBusy(`verify:${skillId}`);
+    try {
+      await api.skillVerify(skillId, runtime);
+      await load(true);
+    } catch (err) {
+      console.error("skill verify failed", err);
+      alert("确认失败");
+    } finally {
+      setActionBusy(null);
+    }
+  };
+
   const archive = async (skillId: string, runtime: "openclaw" | "hermes" = "openclaw") => {
     if (!confirm(`确认下线技能 ${skillId}（${runtime}）？将移动到 _archive/`)) return;
     setActionBusy(`archive:${skillId}`);
@@ -301,19 +352,30 @@ export function SkillsPage() {
     <>
       <PageHeader
         title="技能目录"
-        description={`OpenClaw / Hermes 已扫描 ${skills.length} · 展示 ${filtered.length}`}
+        description={`已安装 ${skills.length} · 待提炼 ${captures.length} · 草稿 ${drafts.length}`}
         actions={
           <div className="flex flex-wrap items-center gap-2">
             <select
               value={runtimeFilter}
-              onChange={(e) =>
-                setRuntimeFilter(e.target.value as "all" | "openclaw" | "hermes")
-              }
+              onChange={(e) => setRuntimeFilter(e.target.value as "all" | SkillRuntime)}
               className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm"
             >
-              <option value="all">全部运行时</option>
+              <option value="all">全部来源</option>
+              <option value="catalog">初始技能</option>
               <option value="openclaw">OpenClaw</option>
               <option value="hermes">Hermes</option>
+            </select>
+            <select
+              value={categoryFilter}
+              onChange={(e) => setCategoryFilter(e.target.value)}
+              className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm"
+            >
+              <option value="all">全部分类</option>
+              {CATALOG_CATEGORIES.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
             </select>
             <input
               value={filter}
@@ -368,6 +430,60 @@ export function SkillsPage() {
           </div>
         }
       />
+
+      <ContentPathEditor kind="skills" />
+
+      <section className="mb-4 grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+            <h2 className="mb-2 text-sm font-medium text-slate-200">待提炼</h2>
+            {captures.length === 0 ? (
+              <p className="text-xs text-slate-500">没有未提炼的快照</p>
+            ) : (
+              <ul className="space-y-2">
+                {captures.slice(0, 8).map((item) => (
+                  <li key={item.capture_id} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 truncate text-slate-300">
+                      {item.task_summary || item.capture_id}
+                      {item.explicit ? " · 显式" : ""}
+                    </span>
+                    <button
+                      type="button"
+                      disabled={actionBusy === `refine:${item.capture_id}`}
+                      onClick={() => void refineCapture(item.capture_id)}
+                      className="shrink-0 rounded border border-slate-700 px-2 py-1 text-xs hover:bg-slate-800 disabled:opacity-50"
+                    >
+                      提炼
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-4">
+            <h2 className="mb-2 text-sm font-medium text-slate-200">草稿</h2>
+            {drafts.length === 0 ? (
+              <p className="text-xs text-slate-500">没有待确认的技能</p>
+            ) : (
+              <ul className="space-y-2">
+                {drafts.map((item) => (
+                  <li key={`${item.runtime}:${item.id}`} className="flex items-center justify-between gap-2 text-sm">
+                    <span className="min-w-0 truncate text-slate-300">{item.name}</span>
+                    <button
+                      type="button"
+                      disabled={actionBusy === `verify:${item.id}`}
+                      onClick={() =>
+                        void verifyDraft(item.id, item.runtime === "hermes" ? "hermes" : "openclaw")
+                      }
+                      className="shrink-0 rounded border border-emerald-800 px-2 py-1 text-xs text-emerald-200 hover:bg-emerald-950 disabled:opacity-50"
+                    >
+                      确认可用
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </section>
 
       {installMsg && (
         <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm">
@@ -449,11 +565,13 @@ export function SkillsPage() {
       {loading ? (
         <p className="text-slate-500">加载中…</p>
       ) : filtered.length === 0 ? (
-        <EmptyState title="未找到技能" description="调整筛选条件或刷新目录" />
+        <EmptyState title="未找到技能" description="调整筛选条件或刷新目录。已验证技能会出现在这里。" />
       ) : (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <div>
+          <h2 className="mb-2 text-sm font-medium text-slate-200">已安装 / 已验证</h2>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {filtered.map((s) => {
-            const rt = (s.runtime || "openclaw") as "openclaw" | "hermes";
+            const rt = (s.runtime || "openclaw") as SkillRuntime;
             const auditRec = audits[`${rt}:${s.id}`] || audits[s.id];
             return (
               <div
@@ -471,7 +589,7 @@ export function SkillsPage() {
                   </p>
                   <div className="flex shrink-0 flex-wrap justify-end gap-1">
                     <span className="rounded bg-slate-800 px-1.5 py-0.5 text-[10px] uppercase text-slate-400">
-                      {rt}
+                      {s.category || rt}
                     </span>
                     {s.archived && (
                       <span className="rounded bg-slate-700/80 px-1.5 py-0.5 text-[10px] text-slate-300">
@@ -513,7 +631,7 @@ export function SkillsPage() {
                   className="mt-3 flex gap-3 text-xs opacity-0 transition group-hover:opacity-100"
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {!s.archived && (
+                  {!s.archived && rt !== "catalog" && (
                     <>
                       <button
                         onClick={() => audit(s.id)}
@@ -523,7 +641,7 @@ export function SkillsPage() {
                         审核
                       </button>
                       <button
-                        onClick={() => archive(s.id, rt)}
+                        onClick={() => archive(s.id, rt === "hermes" ? "hermes" : "openclaw")}
                         disabled={actionBusy === `archive:${s.id}`}
                         className="text-slate-400 hover:text-rose-300 disabled:opacity-50"
                       >
@@ -543,6 +661,7 @@ export function SkillsPage() {
               </div>
             );
           })}
+          </div>
         </div>
       )}
 
@@ -616,7 +735,7 @@ export function SkillsPage() {
                   {detail.path}
                 </p>
                 <div className="mt-4 flex gap-2">
-                  {!detail.archived && (
+                  {!detail.archived && detail.runtime !== "catalog" && (
                     <>
                       <button
                         onClick={() => audit(detail.id)}
@@ -625,7 +744,9 @@ export function SkillsPage() {
                         审核
                       </button>
                       <button
-                        onClick={() => archive(detail.id, selectedRuntime)}
+                        onClick={() =>
+                          archive(detail.id, selectedRuntime === "hermes" ? "hermes" : "openclaw")
+                        }
                         className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:border-rose-500/50 hover:text-rose-300"
                       >
                         下线

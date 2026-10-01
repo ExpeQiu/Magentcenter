@@ -56,6 +56,7 @@ class TaskManager:
             duration_ms=rec.duration_ms or 0,
             start_date=rec.start_date or "",
             due_date=rec.due_date or "",
+            node_id=getattr(rec, "node_id", "") or "",
             created_at=rec.created_at,
             updated_at=rec.updated_at,
         )
@@ -102,9 +103,29 @@ class TaskManager:
 
     async def create_task(self, req: CreateTaskRequest) -> TaskInfo:
         runtime = self._resolve_runtime(req)
-        agent = await self.registry.get_agent(req.agent_id, runtime=runtime)
-        if not agent:
-            raise ValueError(f"agent not found: {runtime}/{req.agent_id}")
+        target = (req.node_id or "").strip()
+        remote_node = ""
+        stamped_node = ""
+        if target and target.lower() != "local":
+            from app.core.fleet import FleetError, plan_dispatch
+
+            try:
+                plan = await plan_dispatch(
+                    target, runtime, req.agent_id, workspace_id=req.workspace_id or ""
+                )
+            except FleetError as e:
+                raise ValueError(str(e)) from e
+            stamped_node = plan["node_id"]
+            if plan["local"]:
+                agent = await self.registry.get_agent(req.agent_id, runtime=runtime)
+                if not agent:
+                    raise ValueError(f"agent not found: {runtime}/{req.agent_id}")
+            else:
+                remote_node = plan["node_id"]
+        else:
+            agent = await self.registry.get_agent(req.agent_id, runtime=runtime)
+            if not agent:
+                raise ValueError(f"agent not found: {runtime}/{req.agent_id}")
 
         # 固化 runtime，供 dispatch 使用
         req = req.model_copy(update={"runtime": runtime})  # type: ignore[arg-type]
@@ -137,15 +158,17 @@ class TaskManager:
         if want_inject and (req.prompt or "").strip():
             try:
                 from app.core.knowledge import build_task_inject_context
+                from app.core.wiki_layers import is_high_stakes
 
                 for_ops = req.agent_id in ("ops-agent", "ops") or "cron-repair" in system_prompt
+                high_stakes = for_ops or is_high_stakes(req.prompt) or is_high_stakes(system_prompt)
                 # 跨 runtime 共享机构记忆：注入检索不按 runtime 收窄
                 block, hits = await build_task_inject_context(
                     req.prompt,
                     workspace_id=workspace_id,
                     runtime=None,
                     top_k=max(1, int(self.settings.knowledge_inject_top_k or 3)),
-                    for_ops=for_ops,
+                    for_ops=high_stakes,
                 )
                 if block:
                     system_prompt = (
@@ -154,13 +177,44 @@ class TaskManager:
                         else block
                     )
                     logger.info(
-                        "knowledge injected task=%s hits=%d kinds=%s",
+                        "knowledge injected task=%s hits=%d layers=%s",
                         task_id,
                         len(hits),
-                        [h.kind for h in hits],
+                        [h.layer for h in hits],
                     )
+                if high_stakes and not hits and not req.skip_knowledge_gate:
+                    note = "已跳过门禁：高风险任务未召回到依据。"
+                    system_prompt = f"{note}\n\n{system_prompt}".strip()
+                    logger.warning("knowledge gate skipped task=%s agent=%s", task_id, req.agent_id)
+                    gate_note = note
+                else:
+                    gate_note = ""
             except Exception as e:
                 logger.warning("knowledge inject failed agent=%s: %s", req.agent_id, e)
+                gate_note = ""
+        else:
+            gate_note = ""
+
+        if self.settings.skill_mine_enabled and (req.prompt or "").strip():
+            try:
+                from app.core.skill_mine import build_skill_inject_block
+
+                skill_block = await build_skill_inject_block(
+                    req.prompt,
+                    runtime=runtime,
+                    top_k=max(1, int(self.settings.skill_inject_top_k or 2)),
+                    openclaw_dir=self.settings.skills_dir or None,
+                    hermes_dir=self.settings.hermes_skills_dir or None,
+                )
+                if skill_block:
+                    system_prompt = (
+                        f"{skill_block}\n\n{system_prompt}".strip()
+                        if system_prompt
+                        else skill_block
+                    )
+                    logger.info("skill injected task=%s", task_id)
+            except Exception as e:
+                logger.warning("skill inject failed task=%s: %s", task_id, e)
 
         # 固化注入后的 system_prompt 与解析后的 workspace，供 dispatch / 蒸馏使用
         req = req.model_copy(
@@ -181,6 +235,7 @@ class TaskManager:
                 session_id=req.resume_session_id or "",
                 start_date=req.start_date or "",
                 due_date=req.due_date or "",
+                node_id=stamped_node,
             )
             session.add(rec)
             await session.commit()
@@ -188,16 +243,55 @@ class TaskManager:
             info = self._record_to_info(rec)
 
         logger.info(
-            "task created id=%s runtime=%s agent=%s project=%s workspace=%s inject=%s",
+            "task created id=%s runtime=%s agent=%s project=%s workspace=%s inject=%s gate=%s",
             task_id,
             runtime,
             req.agent_id,
             project_id or "-",
             workspace_id or "-",
             want_inject,
+            bool(gate_note),
         )
+        if gate_note:
+            await self._emit(
+                task_id,
+                TaskEvent(type="status", status="queued", content=gate_note),
+            )
         if project_id:
             await project_service.update_task_count(project_id, 1)
+        if remote_node:
+            await self._emit(
+                task_id,
+                TaskEvent(
+                    type="status",
+                    status="queued",
+                    content=f"queued for node {remote_node}",
+                ),
+            )
+            logger.info(
+                "task queued remote id=%s node=%s runtime=%s agent=%s",
+                task_id,
+                remote_node,
+                runtime,
+                req.agent_id,
+            )
+            try:
+                from app.core.fleet import notify_connector
+
+                await notify_connector(
+                    remote_node,
+                    {
+                        "id": task_id,
+                        "agent_id": req.agent_id,
+                        "runtime": runtime,
+                        "prompt": req.prompt,
+                        "system_prompt": system_prompt,
+                        "session_id": req.resume_session_id or "",
+                    },
+                )
+            except Exception as e:
+                logger.warning("fleet notify failed task=%s node=%s: %s", task_id, remote_node, e)
+            return info
         asyncio.create_task(self._dispatch(task_id, req))
         return info
 
@@ -223,6 +317,7 @@ class TaskManager:
             timeout = req.timeout or self.settings.openclaw_default_timeout
         session_id = req.resume_session_id or f"agentcenter-{uuid.uuid4().hex[:12]}"
         output_parts: list[str] = []
+        tools_used: list[str] = []
         final_status = "failed"
         final_error = ""
         usage: TokenUsage | None = None
@@ -252,6 +347,9 @@ class TaskManager:
 
                 if event.type == "text":
                     output_parts.append(event.content)
+                elif event.type == "tool_use" and event.tool:
+                    if event.tool not in tools_used:
+                        tools_used.append(event.tool)
                 elif event.type == "error":
                     final_error = event.content
                     final_status = "failed"
@@ -300,6 +398,32 @@ class TaskManager:
             )
         except Exception as e:
             logger.warning("knowledge distill failed task=%s: %s", task_id, e)
+        if self.settings.skill_mine_enabled and final_status in ("completed", "failed", "timeout"):
+            try:
+                from app.core.skill_mine import capture_task, record_skill_outcomes
+
+                await capture_task(
+                    task_id=task_id,
+                    prompt=req.prompt or "",
+                    output=output_text,
+                    error=final_error,
+                    agent_id=req.agent_id or "",
+                    runtime=runtime,
+                    session_id=session_id,
+                    status=final_status,
+                    workspace_id=req.workspace_id or "",
+                    tools_used=tools_used,
+                    duration_ms=duration_ms,
+                    skills_dir=self.settings.skills_dir or None,
+                    hermes_skills_dir=self.settings.hermes_skills_dir or None,
+                )
+                await record_skill_outcomes(
+                    req.system_prompt or "",
+                    success=final_status == "completed",
+                    runtime=runtime,
+                )
+            except Exception as e:
+                logger.warning("skill capture failed task=%s: %s", task_id, e)
         logger.info(
             "task finished id=%s runtime=%s status=%s",
             task_id,
@@ -333,6 +457,8 @@ class TaskManager:
         project_id: str | None = None,
         workspace_id: str | None = None,
         scheduled: bool = False,
+        node_id: str | None = None,
+        remote_only: bool = False,
     ) -> tuple[list[TaskInfo], int]:
         factory = get_session_factory()
         async with factory() as session:
@@ -369,6 +495,13 @@ class TaskManager:
                 )
                 q = q.where(scheduled_cond)
                 count_q = count_q.where(scheduled_cond)
+            if node_id:
+                q = q.where(TaskRecord.node_id == node_id)
+                count_q = count_q.where(TaskRecord.node_id == node_id)
+            if remote_only:
+                remote_cond = TaskRecord.node_id != ""
+                q = q.where(remote_cond)
+                count_q = count_q.where(remote_cond)
             total = (await session.execute(count_q)).scalar() or 0
             q = (
                 q.order_by(TaskRecord.created_at.desc())
@@ -420,6 +553,14 @@ class TaskManager:
         task = await self.get_task(task_id)
         if not task:
             return None
+        if task.status == "queued" and (task.node_id or ""):
+            await self._update_task(task_id, status="cancelled", error="cancelled before claim")
+            await self._emit(
+                task_id,
+                TaskEvent(type="status", status="cancelled", content="cancelled"),
+            )
+            logger.info("remote task cancelled before claim id=%s node=%s", task_id, task.node_id)
+            return await self.get_task(task_id)
         if task.status != "running":
             raise ValueError(f"task {task_id} is not running (status={task.status})")
         self._cancel_flags[task_id] = True
@@ -443,6 +584,7 @@ class TaskManager:
             start_date=task.start_date or "",
             due_date=task.due_date or "",
             resume_session_id=task.session_id or None,
+            node_id=task.node_id or "",
         )
         return await self.create_task(req)
 

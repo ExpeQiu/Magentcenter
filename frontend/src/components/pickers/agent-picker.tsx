@@ -25,6 +25,7 @@ interface AgentPickerProps {
   onChange: (ref: string, agent?: AgentInfo) => void;
   agents?: AgentInfo[];
   placeholder?: string;
+  refKey?: (agent: AgentInfo) => string;
 }
 
 export function AgentPicker({
@@ -32,6 +33,7 @@ export function AgentPicker({
   onChange,
   agents: externalAgents,
   placeholder = "选择 Agent…",
+  refKey = agentRefKey,
 }: AgentPickerProps) {
   const [open, setOpen] = useState(false);
   const [agents, setAgents] = useState<AgentInfo[]>(externalAgents || []);
@@ -56,7 +58,7 @@ export function AgentPicker({
     return () => document.removeEventListener("mousedown", handler);
   }, []);
 
-  const selected = agents.find((a) => agentRefKey(a) === value);
+  const selected = agents.find((a) => refKey(a) === value);
   const filtered = agents.filter(
     (a) =>
       !search ||
@@ -79,7 +81,10 @@ export function AgentPicker({
               {selected.runtime}
             </span>
             {selected.identity_emoji} {selected.name}{" "}
-            <span className="text-slate-500">({selected.id})</span>
+            <span className="text-slate-500">
+              ({selected.id}
+              {selected.node_name ? ` · ${selected.node_name}` : ""})
+            </span>
           </span>
         ) : (
           <span className="text-slate-500">{placeholder}</span>
@@ -97,11 +102,11 @@ export function AgentPicker({
           />
           <ul className="max-h-48 overflow-y-auto">
             {filtered.map((a) => (
-              <li key={agentRefKey(a)}>
+              <li key={refKey(a)}>
                 <button
                   type="button"
                   onClick={() => {
-                    onChange(agentRefKey(a), a);
+                    onChange(refKey(a), a);
                     setOpen(false);
                     setSearch("");
                   }}
@@ -112,7 +117,10 @@ export function AgentPicker({
                   </span>
                   <span>{a.identity_emoji || "🤖"}</span>
                   <span className="flex-1 truncate">{a.name}</span>
-                  <span className="text-xs text-slate-500">{a.id}</span>
+                  <span className="text-xs text-slate-500">
+                    {a.node_name ? `${a.node_name} · ` : ""}
+                    {a.id}
+                  </span>
                 </button>
               </li>
             ))}

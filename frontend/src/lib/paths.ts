@@ -22,6 +22,7 @@ export const paths = {
     sessionDetail: (id: string) => `/${slug}/sessions/detail?id=${enc(id)}`,
     knowledge: () => `/${slug}/knowledge`,
     outputs: () => `/${slug}/outputs`,
+    fleet: () => `/${slug}/fleet`,
   }),
 } as const;
 
@@ -38,4 +39,5 @@ export const LEGACY_PREFIXES = [
   "sessions",
   "knowledge",
   "outputs",
+  "fleet",
 ] as const;

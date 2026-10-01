@@ -5,11 +5,18 @@ import logging
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
+from app.core import content_roots
 from app.core.skills import (
     archive_skill,
     get_skill,
     install_hermes_skill,
     scan_all_skills,
+)
+from app.core.skill_mine import (
+    list_captured,
+    refine_capture,
+    reject_skill,
+    verify_skill,
 )
 from app.core.squads import get_squad, load_squads
 from app.models.schemas import (
@@ -83,21 +90,81 @@ async def list_skills(
     request: Request,
     include_hidden: bool = False,
     include_archived: bool = False,
+    include_draft: bool = False,
     runtime: str | None = None,
 ):
     settings = request.app.state.settings
     runtimes = settings.enabled_runtimes()
     if runtime:
-        if runtime not in ("openclaw", "hermes"):
-            raise HTTPException(status_code=400, detail="runtime must be openclaw|hermes")
+        if runtime not in ("openclaw", "hermes", "catalog"):
+            raise HTTPException(status_code=400, detail="runtime must be openclaw|hermes|catalog")
         runtimes = [runtime]
     return scan_all_skills(
         openclaw_dir=settings.skills_dir or None,
         hermes_dir=settings.hermes_skills_dir or None,
+        catalog_dir=content_roots.skills_dir() or None,
         include_hidden=include_hidden,
         include_archived=include_archived,
+        include_draft=include_draft,
         runtimes=runtimes,
     )
+
+
+@router.get("/api/skills/captured")
+async def skills_captured(request: Request, runtime: str | None = None):
+    settings = request.app.state.settings
+    if runtime and runtime not in ("openclaw", "hermes"):
+        raise HTTPException(status_code=400, detail="runtime must be openclaw|hermes")
+    return list_captured(
+        skills_dir=settings.skills_dir or None,
+        hermes_skills_dir=settings.hermes_skills_dir or None,
+        runtime=runtime,
+    )
+
+
+@router.post("/api/skills/captured/{capture_id}/refine")
+async def skills_refine(capture_id: str, request: Request):
+    settings = request.app.state.settings
+    try:
+        return await refine_capture(
+            capture_id,
+            skills_dir=settings.skills_dir or None,
+            hermes_skills_dir=settings.hermes_skills_dir or None,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post("/api/skills/{skill_id:path}/verify")
+async def skills_verify(skill_id: str, request: Request, runtime: str = "openclaw"):
+    settings = request.app.state.settings
+    if runtime not in ("openclaw", "hermes"):
+        raise HTTPException(status_code=400, detail="runtime must be openclaw|hermes")
+    try:
+        return await verify_skill(
+            skill_id,
+            runtime=runtime,
+            skills_dir=settings.skills_dir or None,
+            hermes_skills_dir=settings.hermes_skills_dir or None,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+
+
+@router.post("/api/skills/{skill_id:path}/reject")
+async def skills_reject(skill_id: str, request: Request, runtime: str = "openclaw"):
+    settings = request.app.state.settings
+    if runtime not in ("openclaw", "hermes"):
+        raise HTTPException(status_code=400, detail="runtime must be openclaw|hermes")
+    try:
+        return await reject_skill(
+            skill_id,
+            runtime=runtime,
+            skills_dir=settings.skills_dir or None,
+            hermes_skills_dir=settings.hermes_skills_dir or None,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
 
 
 @router.get("/api/skills/{skill_id:path}")
@@ -107,14 +174,15 @@ async def skill_detail(
     runtime: str = "openclaw",
 ):
     settings = request.app.state.settings
-    if runtime not in ("openclaw", "hermes"):
-        raise HTTPException(status_code=400, detail="runtime must be openclaw|hermes")
+    if runtime not in ("openclaw", "hermes", "catalog"):
+        raise HTTPException(status_code=400, detail="runtime must be openclaw|hermes|catalog")
     detail = get_skill(
         skill_id,
         settings.skills_dir or None,
         include_archived=True,
         runtime=runtime,
         hermes_skills_dir=settings.hermes_skills_dir or None,
+        catalog_dir=content_roots.skills_dir() or None,
     )
     if not detail:
         raise HTTPException(status_code=404, detail=f"skill not found: {skill_id}")

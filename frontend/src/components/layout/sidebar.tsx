@@ -2,12 +2,10 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useEffect, useState } from "react";
-import { api } from "@/lib/api";
-import { useWorkspace, useWorkspacePaths } from "@/lib/context/workspace-context";
+import { useState } from "react";
+import { useWorkspacePaths } from "@/lib/context/workspace-context";
+import { useTerminal } from "@/lib/context/terminal-context";
 import { useModal } from "@/lib/context/modal-context";
-import { paths } from "@/lib/paths";
-import type { WorkspaceInfo } from "@/lib/types";
 
 interface SidebarProps {
   healthLabel: string;
@@ -16,16 +14,9 @@ interface SidebarProps {
 export function Sidebar({ healthLabel }: SidebarProps) {
   const pathname = usePathname();
   const wp = useWorkspacePaths();
-  const { slug } = useWorkspace();
   const { openCreateTask } = useModal();
-  const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([]);
-  const [wsOpen, setWsOpen] = useState(false);
-
-  useEffect(() => {
-    api.workspaces().then(setWorkspaces).catch(console.error);
-  }, []);
-
-  const current = workspaces.find((w) => w.slug === slug);
+  const { nodes, selected, select } = useTerminal();
+  const [open, setOpen] = useState(false);
 
   const NAV = [
     { href: wp.tasks(), label: "任务", icon: "📋" },
@@ -35,6 +26,7 @@ export function Sidebar({ healthLabel }: SidebarProps) {
     { href: wp.autopilots(), label: "Autopilot", icon: "⏱" },
     { href: wp.skills(), label: "技能", icon: "🛠" },
     { href: wp.kanban(), label: "Kanban", icon: "📌" },
+    { href: wp.fleet(), label: "多端", icon: "🖥" },
     { href: wp.system(), label: "系统", icon: "📡" },
     { href: wp.sessions(), label: "Sessions", icon: "💬" },
     { href: wp.knowledge(), label: "知识库", icon: "📚" },
@@ -45,32 +37,42 @@ export function Sidebar({ healthLabel }: SidebarProps) {
     <aside className="flex h-full w-56 shrink-0 flex-col border-r border-slate-800 bg-slate-950">
       <div className="relative border-b border-slate-800 p-3">
         <button
-          onClick={() => setWsOpen(!wsOpen)}
+          onClick={() => setOpen(!open)}
           className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-slate-800/60"
         >
           <div>
-            <p className="text-xs text-slate-500">工作区</p>
-            <p className="text-sm font-semibold">{current?.name || slug}</p>
+            <p className="text-xs text-slate-500">终端</p>
+            <p className="truncate text-sm font-semibold">{selected?.name || "未选择"}</p>
           </div>
-          <span className="text-slate-500">{wsOpen ? "▴" : "▾"}</span>
+          <span className="text-slate-500">{open ? "▴" : "▾"}</span>
         </button>
-        {wsOpen && (
-          <div className="absolute left-3 right-3 top-full z-20 mt-1 rounded-lg border border-slate-700 bg-slate-900 py-1 shadow-xl">
-            {workspaces.map((w) => (
-              <Link
-                key={w.id}
-                href={paths.workspace(w.slug).tasks()}
-                onClick={() => setWsOpen(false)}
-                className={`block px-3 py-2 text-sm ${
-                  w.slug === slug
-                    ? "bg-indigo-500/15 text-indigo-200"
-                    : "text-slate-300 hover:bg-slate-800"
-                }`}
-              >
-                {w.name}
-                <span className="ml-2 text-xs text-slate-500">/{w.slug}</span>
-              </Link>
-            ))}
+        {open && (
+          <div className="absolute left-3 right-3 top-full z-20 mt-1 max-h-80 overflow-y-auto rounded-lg border border-slate-700 bg-slate-900 py-1 shadow-xl">
+            {nodes.length === 0 ? (
+              <p className="px-3 py-2 text-sm text-slate-500">还没有设备</p>
+            ) : (
+              nodes.map((node) => (
+                <button
+                  key={node.id}
+                  type="button"
+                  onClick={() => {
+                    select(node.id);
+                    setOpen(false);
+                  }}
+                  className={`block w-full px-3 py-2 text-left text-sm ${
+                    node.id === selected?.id
+                      ? "bg-indigo-500/15 text-indigo-200"
+                      : "text-slate-300 hover:bg-slate-800"
+                  }`}
+                >
+                  {node.name}
+                  <span className="ml-2 text-xs text-slate-500">
+                    {node.online ? "在线" : "离线"}
+                    {node.bound ? "" : " · 待绑定"}
+                  </span>
+                </button>
+              ))
+            )}
           </div>
         )}
       </div>

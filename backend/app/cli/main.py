@@ -123,6 +123,8 @@ def cmd_tasks(args: argparse.Namespace) -> int:
             body["timeout"] = args.timeout
         if args.session:
             body["resume_session_id"] = args.session
+        if getattr(args, "node", None):
+            body["node_id"] = args.node
 
         task = client.create_task(body)
         if args.wait:
@@ -345,6 +347,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_tasks_run.add_argument("--project", default="")
     p_tasks_run.add_argument("--timeout", type=int, default=None)
     p_tasks_run.add_argument("--session", default=None, help="恢复 session_id")
+    p_tasks_run.add_argument(
+        "--node",
+        default=None,
+        help="派到设备：auto 或 macmin1/macmin2/raspberry/macpro",
+    )
     p_tasks_run.add_argument("--wait", action="store_true", help="等待任务完成")
     p_tasks_run.add_argument("--wait-timeout", type=float, default=600.0)
     p_tasks_run.set_defaults(func=cmd_tasks)

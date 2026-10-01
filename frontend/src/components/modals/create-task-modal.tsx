@@ -4,17 +4,42 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api } from "@/lib/api";
 import { useWorkspace, useWorkspacePaths } from "@/lib/context/workspace-context";
+import { useTerminal } from "@/lib/context/terminal-context";
 import { useModal } from "@/lib/context/modal-context";
 import {
   AgentPicker,
+  agentRefKey,
   parseAgentRef,
 } from "@/components/pickers/agent-picker";
 import { ProjectPicker } from "@/components/pickers/project-picker";
+import type { AgentInfo, RuntimeName } from "@/lib/types";
+
+function taskAgentRef(agent: AgentInfo): string {
+  if (agent.node_id) return `node:${agent.node_id}:${agent.runtime}:${agent.id}`;
+  return agentRefKey(agent);
+}
+
+function decodeTaskAgent(value: string): {
+  nodeId?: string;
+  runtime: RuntimeName;
+  agentId: string;
+} {
+  if (value.startsWith("node:")) {
+    const [, nodeId, runtime, ...rest] = value.split(":");
+    return {
+      nodeId,
+      runtime: (runtime || "openclaw") as RuntimeName,
+      agentId: rest.join(":"),
+    };
+  }
+  return parseAgentRef(value);
+}
 
 export function CreateTaskModal() {
   const { modal, closeModal, presetAgentId, presetProjectId, openCreateTask } =
     useModal();
   const { workspaceId } = useWorkspace();
+  const { selected: terminal } = useTerminal();
   const wp = useWorkspacePaths();
   const router = useRouter();
   const [agentRef, setAgentRef] = useState("");
@@ -23,6 +48,7 @@ export function CreateTaskModal() {
   const [startDate, setStartDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
 
   useEffect(() => {
     if (modal === "create-task") {
@@ -37,12 +63,47 @@ export function CreateTaskModal() {
     return () => document.removeEventListener("agentcenter:create-task", handler);
   }, [openCreateTask]);
 
+  useEffect(() => {
+    if (modal !== "create-task") return;
+    api
+      .agents()
+      .then((local) => {
+        const bound: AgentInfo[] = [];
+        if (terminal?.bound) {
+          for (const agent of terminal.agents) {
+            bound.push({
+              id: agent.id,
+              name: agent.name,
+              model: agent.model || "",
+              workspace: "",
+              identity_name: agent.name,
+              identity_emoji: "",
+              is_default: false,
+              runtime: agent.runtime,
+              node_id: terminal.id,
+              node_name: terminal.name,
+            });
+          }
+        }
+        setAgents([...bound, ...local]);
+        console.info(
+          "task agents loaded terminal=%s bound=%d local=%d",
+          terminal?.id || "-",
+          bound.length,
+          local.length
+        );
+      })
+      .catch((err) => {
+        console.error(err);
+      });
+  }, [modal, terminal]);
+
   if (modal !== "create-task") return null;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!agentRef || !prompt.trim()) return;
-    const { runtime, agentId } = parseAgentRef(agentRef);
+    const { runtime, agentId, nodeId } = decodeTaskAgent(agentRef);
     if (!agentId) return;
     setSubmitting(true);
     try {
@@ -50,18 +111,21 @@ export function CreateTaskModal() {
         agent_id: agentId,
         runtime,
         prompt,
+        node_id: nodeId,
         workspace_id: workspaceId || undefined,
         project_id: projectId || undefined,
         start_date: startDate || undefined,
         due_date: dueDate || undefined,
       });
+      console.info("task created id=%s node=%s agent=%s", task.id, nodeId || "-", agentId);
       closeModal();
       setPrompt("");
       setStartDate("");
       setDueDate("");
       router.push(wp.taskDetail(task.id));
-    } catch {
-      alert("创建任务失败");
+    } catch (err) {
+      console.error(err);
+      alert(err instanceof Error ? err.message : "创建任务失败");
     } finally {
       setSubmitting(false);
     }
@@ -88,7 +152,12 @@ export function CreateTaskModal() {
             <label className="mb-1 block text-xs text-slate-400">
               Agent（含 OpenClaw / Hermes）
             </label>
-            <AgentPicker value={agentRef} onChange={(ref) => setAgentRef(ref)} />
+            <AgentPicker
+              value={agentRef}
+              agents={agents}
+              refKey={taskAgentRef}
+              onChange={(ref) => setAgentRef(ref)}
+            />
           </div>
           <div>
             <label className="mb-1 block text-xs text-slate-400">任务描述</label>

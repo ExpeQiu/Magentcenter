@@ -134,7 +134,10 @@ export function KnowledgeDetailDrawer({
       >
         <header className="flex items-start justify-between gap-3 border-b border-slate-800 px-4 py-3">
           <div className="min-w-0">
-            <p className="text-xs uppercase tracking-wide text-slate-500">{detail.kind}</p>
+            <p className="text-xs uppercase tracking-wide text-slate-500">
+              {detail.layer || detail.kind}
+              {detail.facet ? ` / ${detail.facet}` : ""}
+            </p>
             <h2 className="mt-1 text-base font-medium text-slate-100">{detail.title}</h2>
             {loading && <p className="mt-1 text-xs text-slate-500">加载详情…</p>}
           </div>

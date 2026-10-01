@@ -20,9 +20,14 @@ import type {
   SessionInfo,
   SkillDetail,
   SkillInfo,
+  SkillCapture,
+  SkillMineRecord,
   SquadInfo,
   SwarmGraph,
   SystemStatus,
+  FleetAgent,
+  FleetNode,
+  FleetScan,
   TaskInfo,
   TaskListResponse,
   WorkspaceInfo,
@@ -69,8 +74,64 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
   }
 }
 
+export interface ContentRootInfo {
+  path: string;
+  exists: boolean;
+  file_count: number;
+}
+
+export interface ContentRoots {
+  knowledge_wiki_dir: string;
+  skills_catalog_dir: string;
+  outputs_vault_dir: string;
+  knowledge_default: string;
+  skills_default: string;
+  outputs_default: string;
+  knowledge: ContentRootInfo;
+  skills: ContentRootInfo;
+  outputs: ContentRootInfo;
+}
+
 export const api = {
   health: () => request<HealthResponse>("/api/health"),
+  contentRoots: () => request<ContentRoots>("/api/settings/content-roots"),
+  updateContentRoots: (body: {
+    knowledge_wiki_dir?: string;
+    skills_catalog_dir?: string;
+    outputs_vault_dir?: string;
+  }) =>
+    request<ContentRoots>("/api/settings/content-roots", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  fleetNodes: (workspaceId = "") => {
+    const q = workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : "";
+    return request<FleetNode[]>(`/api/fleet/nodes${q}`);
+  },
+  fleetScan: () => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90_000);
+    return request<FleetScan>("/api/fleet/scan", { signal: ctrl.signal }).finally(() =>
+      clearTimeout(timer)
+    );
+  },
+  fleetBind: (body: {
+    node_id?: string;
+    name?: string;
+    workspace_id?: string;
+    agents: FleetAgent[];
+  }) =>
+    request<FleetNode>("/api/fleet/bind", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+  fleetUnbind: (nodeId: string) =>
+    request<FleetNode | { id: string; removed: boolean }>(
+      `/api/fleet/nodes/${encodeURIComponent(nodeId)}`,
+      { method: "DELETE" }
+    ),
   workspaces: () => request<WorkspaceInfo[]>("/api/workspaces"),
   workspaceBySlug: (slug: string) =>
     request<WorkspaceInfo>(`/api/workspaces/by-slug/${encodeURIComponent(slug)}`),
@@ -88,6 +149,8 @@ export const api = {
       scheduled?: boolean;
       /** 合并 OpenClaw/Hermes 近期 Session 为执行中（默认 true） */
       includeLive?: boolean;
+      nodeId?: string;
+      remoteOnly?: boolean;
     }
   ) => {
     const q = new URLSearchParams({ page: String(page), page_size: "100" });
@@ -97,6 +160,8 @@ export const api = {
     if (opts?.workspaceId) q.set("workspace_id", opts.workspaceId);
     if (opts?.scheduled) q.set("scheduled", "true");
     if (opts?.includeLive === false) q.set("include_live", "false");
+    if (opts?.nodeId) q.set("node_id", opts.nodeId);
+    if (opts?.remoteOnly) q.set("remote_only", "true");
     return request<TaskListResponse>(`/api/tasks?${q}`);
   },
   task: (id: string) => request<TaskInfo>(`/api/tasks/${id}`),
@@ -109,6 +174,7 @@ export const api = {
     project_id?: string;
     start_date?: string;
     due_date?: string;
+    node_id?: string;
   }) =>
     request<TaskInfo>("/api/tasks", {
       method: "POST",
@@ -192,16 +258,33 @@ export const api = {
   skills: (opts?: {
     includeHidden?: boolean;
     includeArchived?: boolean;
-    runtime?: "openclaw" | "hermes" | "all";
+    includeDraft?: boolean;
+    runtime?: "openclaw" | "hermes" | "catalog" | "all";
   }) => {
     const q = new URLSearchParams();
     if (opts?.includeHidden) q.set("include_hidden", "true");
     if (opts?.includeArchived) q.set("include_archived", "true");
+    if (opts?.includeDraft) q.set("include_draft", "true");
     if (opts?.runtime && opts.runtime !== "all") q.set("runtime", opts.runtime);
     const qs = q.toString();
     return request<SkillInfo[]>(`/api/skills${qs ? `?${qs}` : ""}`);
   },
-  skillDetail: (skillId: string, runtime: "openclaw" | "hermes" = "openclaw") => {
+  skillCaptured: (runtime?: "openclaw" | "hermes" | "all") => {
+    const q = new URLSearchParams();
+    if (runtime && runtime !== "all") q.set("runtime", runtime);
+    const qs = q.toString();
+    return request<SkillCapture[]>(`/api/skills/captured${qs ? `?${qs}` : ""}`);
+  },
+  skillRefine: (captureId: string) =>
+    request<SkillMineRecord>(`/api/skills/captured/${encodeURIComponent(captureId)}/refine`, {
+      method: "POST",
+    }),
+  skillVerify: (skillId: string, runtime: "openclaw" | "hermes" = "openclaw") =>
+    request<SkillMineRecord>(
+      `/api/skills/${encodeURIComponent(skillId)}/verify?runtime=${runtime}`,
+      { method: "POST" }
+    ),
+  skillDetail: (skillId: string, runtime: "openclaw" | "hermes" | "catalog" = "openclaw") => {
     const path = skillId.split("/").map(encodeURIComponent).join("/");
     return request<SkillDetail>(`/api/skills/${path}?runtime=${runtime}`);
   },
@@ -371,6 +454,7 @@ export const api = {
       runtime?: string;
       mode?: "keyword" | "vector" | "hybrid";
       kind?: string;
+      layer?: string;
       workspaceId?: string;
       includeArchive?: boolean;
     }
@@ -380,6 +464,7 @@ export const api = {
     if (opts?.runtime) params.set("runtime", opts.runtime);
     if (opts?.mode) params.set("mode", opts.mode);
     if (opts?.kind) params.set("kind", opts.kind);
+    if (opts?.layer) params.set("layer", opts.layer);
     if (opts?.workspaceId) params.set("workspace_id", opts.workspaceId);
     if (opts?.includeArchive) params.set("include_archive", "true");
     return request<KnowledgeHit[]>(`/api/knowledge/search?${params}`);
@@ -394,12 +479,14 @@ export const api = {
   knowledgeList: (opts?: {
     limit?: number;
     kind?: string;
+    layer?: string;
     workspaceId?: string;
     runtime?: string;
   }) => {
     const params = new URLSearchParams();
     if (opts?.limit) params.set("limit", String(opts.limit));
     if (opts?.kind) params.set("kind", opts.kind);
+    if (opts?.layer) params.set("layer", opts.layer);
     if (opts?.workspaceId) params.set("workspace_id", opts.workspaceId);
     if (opts?.runtime) params.set("runtime", opts.runtime);
     const qs = params.toString();
@@ -438,6 +525,8 @@ export const api = {
     }),
   knowledgeCreateEntry: (body: {
     kind: string;
+    layer?: string;
+    facet?: string;
     title: string;
     summary?: string;
     workspace_id?: string;

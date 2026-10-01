@@ -5,6 +5,7 @@ from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from app.core.content_roots import DEFAULT_OUTPUTS_DIR, DEFAULT_SKILLS_DIR, DEFAULT_WIKI_DIR
 from app.models.runtime import parse_enabled_runtimes
 
 
@@ -57,20 +58,29 @@ class Settings(BaseSettings):
     # 任务创建前自动检索注入；任务完成后蒸馏卡片
     knowledge_inject_enabled: bool = True
     knowledge_inject_top_k: int = 3
+    # L2,L3,L1
+    knowledge_layer_weights: str = "3.0,1.2,1.0"
 
+    # Personal Wiki 与技能仓。控制台可改，改动写在 data/content_roots.json。
+    knowledge_wiki_dir: str = DEFAULT_WIKI_DIR
     skills_dir: str = ""
     hermes_skills_dir: str = ""
+    skills_catalog_dir: str = DEFAULT_SKILLS_DIR
+    # 任务收尾捕获；显式标记才提炼
+    skill_mine_enabled: bool = True
+    skill_inject_top_k: int = 2
 
-    # Obsidian expe 库根（只读浏览；范围选择从一级目录起逐级下钻）
-    outputs_vault_root: str = (
-        "/Users/expeqiu/Library/Mobile Documents/"
-        "iCloud~md~obsidian/Documents/expe"
-    )
+    # Obsidian expe 库根。控制台可改，改动写在 data/content_roots.json。
+    outputs_vault_root: str = DEFAULT_OUTPUTS_DIR
     # 额外只读根（逗号/分号/换行分隔的绝对路径），以文件夹名出现在一级目录
     outputs_vault_extra: str = ""
 
     # System 页 Cron 修复派单目标 Agent（可回退 ops / main）
     ops_repair_agent_id: str = "ops-agent"
+
+    # 多端连接器。设备用此令牌注册；webhook 推送也用它签名。留空则拒绝注册。
+    fleet_enroll_token: str = ""
+    fleet_heartbeat_ttl: int = 45
 
     def enabled_runtimes(self) -> list[str]:
         return parse_enabled_runtimes(self.runtimes)

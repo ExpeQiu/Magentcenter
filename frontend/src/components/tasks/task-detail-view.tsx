@@ -81,6 +81,11 @@ export function TaskDetailView() {
             <span>
               Agent: <code className="text-slate-200">{task.agent_id}</code>
             </span>
+            {task.node_id && (
+              <span>
+                设备: <code className="text-slate-200">{task.node_id}</code>
+              </span>
+            )}
             {task.project_id && (
               <span>
                 项目: <code className="text-slate-200">{task.project_id}</code>

@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Sidebar } from "./sidebar";
 import { ModalProvider } from "@/lib/context/modal-context";
+import { TerminalProvider } from "@/lib/context/terminal-context";
 import { CreateTaskModal } from "@/components/modals/create-task-modal";
 import { api } from "@/lib/api";
 
@@ -39,13 +40,15 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <ModalProvider>
-      <div className="flex h-svh overflow-hidden bg-slate-950">
-        <Sidebar healthLabel={healthLabel} />
-        <main className="flex-1 overflow-y-auto">
-          <div className="mx-auto max-w-[93.6rem] px-6 py-6">{children}</div>
-        </main>
-      </div>
-      <CreateTaskModal />
+      <TerminalProvider>
+        <div className="flex h-svh overflow-hidden bg-slate-950">
+          <Sidebar healthLabel={healthLabel} />
+          <main className="flex-1 overflow-y-auto">
+            <div className="mx-auto max-w-[93.6rem] px-6 py-6">{children}</div>
+          </main>
+        </div>
+        <CreateTaskModal />
+      </TerminalProvider>
     </ModalProvider>
   );
 }

@@ -40,6 +40,8 @@ async def list_tasks(
     project_id: str | None = None,
     workspace_id: str | None = None,
     scheduled: bool = False,
+    node_id: str | None = None,
+    remote_only: bool = False,
     include_live: bool = Query(
         True,
         description="合并 OpenClaw/Hermes 近 15 分钟 Session 为执行中任务",
@@ -52,7 +54,15 @@ async def list_tasks(
         if not wid:
             raise HTTPException(status_code=404, detail=f"workspace not found: {workspace_id}")
     items, total = await tm.list_tasks(
-        page, page_size, status, agent_id, project_id, wid, scheduled
+        page,
+        page_size,
+        status,
+        agent_id,
+        project_id,
+        wid,
+        scheduled,
+        node_id,
+        remote_only,
     )
 
     # 项目筛选下不掺 live session；scheduled/gantt 同理

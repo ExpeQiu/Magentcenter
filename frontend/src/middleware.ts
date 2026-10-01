@@ -21,6 +21,7 @@ export function middleware(request: NextRequest) {
 export const config = {
   matcher: [
     "/tasks/:path*",
+    "/fleet/:path*",
     "/projects/:path*",
     "/agents/:path*",
     "/squads/:path*",

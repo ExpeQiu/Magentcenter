@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "@/lib/api";
-import type { KnowledgeHit, KnowledgeKind } from "@/lib/types";
+import type { KnowledgeHit } from "@/lib/types";
 import {
   useWorkspace,
   useWorkspacePaths,
@@ -11,15 +11,14 @@ import {
 import { PageHeader } from "@/components/layout/page-header";
 import { EmptyState } from "@/components/ui/empty-state";
 import { KnowledgeDetailDrawer } from "@/components/knowledge/knowledge-detail-drawer";
+import { ContentPathEditor } from "@/components/settings/content-path-editor";
 
-const KIND_OPTIONS: { value: string; label: string }[] = [
-  { value: "playbook,precedent,shared_fact,incident,artifact_ref", label: "卡片（默认）" },
-  { value: "playbook", label: "Playbook" },
-  { value: "precedent", label: "Precedent" },
-  { value: "incident", label: "Incident" },
-  { value: "artifact_ref", label: "产物指针" },
-  { value: "shared_fact", label: "共享事实" },
-  { value: "archive", label: "Archive 原文" },
+const LAYER_OPTIONS: { value: string; label: string }[] = [
+  { value: "L2,L3,L1", label: "三层（默认）" },
+  { value: "L2", label: "L2 模式与决策" },
+  { value: "L3", label: "L3 流程与工具" },
+  { value: "L1", label: "L1 事实" },
+  { value: "notes", label: "notes 日志" },
 ];
 
 const EMPTY_HITS: KnowledgeHit[] = [];
@@ -32,7 +31,7 @@ export function KnowledgePage({
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"hybrid" | "keyword" | "vector">("hybrid");
   const [runtime, setRuntime] = useState<"all" | "openclaw" | "hermes">("all");
-  const [kind, setKind] = useState(KIND_OPTIONS[0].value);
+  const [layer, setLayer] = useState(LAYER_OPTIONS[0].value);
   const [hits, setHits] = useState<KnowledgeHit[]>(initialHits);
   const [searching, setSearching] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -53,16 +52,14 @@ export function KnowledgePage({
     setPreview("");
     setLoadError("");
     try {
-      const includeArchive = kind === "archive";
-      // 列表默认不按 workspace 收窄，避免空 workspace 卡片被误滤
       const res = await api.knowledgeList({
         limit: 50,
-        kind: includeArchive ? "archive" : kind,
+        layer,
         runtime: runtime === "all" ? undefined : runtime,
       });
       setHits(res);
-      setMsg(res.length ? `最近 ${res.length} 条卡片` : "暂无知识卡片，可点「从任务蒸馏」");
-      console.info("[knowledge] list count=%d kind=%s", res.length, kind);
+      setMsg(res.length ? `最近 ${res.length} 条` : "暂无知识条目，可点「从任务蒸馏」");
+      console.info("[knowledge] list count=%d layer=%s", res.length, layer);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
       console.error("[knowledge] list failed", err);
@@ -72,7 +69,7 @@ export function KnowledgePage({
     } finally {
       setSearching(false);
     }
-  }, [kind, runtime]);
+  }, [layer, runtime]);
 
   useEffect(() => {
     api
@@ -98,14 +95,13 @@ export function KnowledgePage({
     setMsg("");
     setPreview("");
     try {
-      const includeArchive = kind === "archive";
       const res = await api.knowledgeSearch(q.trim(), {
         limit: 30,
         mode,
         runtime: runtime === "all" ? undefined : runtime,
-        kind: includeArchive ? "archive" : kind,
+        layer,
         workspaceId: workspaceId || undefined,
-        includeArchive,
+        includeArchive: layer === "notes",
       });
       setHits(res);
       setMsg(res.length ? `命中 ${res.length}` : "无结果");
@@ -145,7 +141,7 @@ export function KnowledgePage({
           `Playbook ${res.playbooks} · Incident ${res.incidents} · 事实 ${res.shared_facts}` +
           (res.errors ? ` · 错误 ${res.errors}` : "")
       );
-      setKind("playbook,precedent,shared_fact,incident,artifact_ref");
+      setLayer("L2,L3,L1");
       await listRecent();
     } catch (err) {
       console.error("[knowledge] mine-vault failed", err);
@@ -181,10 +177,12 @@ export function KnowledgePage({
     try {
       await api.knowledgeCreateEntry({
         kind: "shared_fact",
+        layer: "L1",
+        facet: "semantic",
         title: factTitle.trim(),
         summary: factBody.trim().slice(0, 500),
         workspace_id: workspaceId || "",
-        tags: ["shared_fact"],
+        tags: ["src:manual", "type:semantic", "status:active"],
         payload: { body: factBody.trim() },
       });
       setFactTitle("");
@@ -198,20 +196,18 @@ export function KnowledgePage({
   };
 
   const openHit = (h: KnowledgeHit) => {
-    console.info("[knowledge] open detail id=%s kind=%s", h.id, h.kind);
+    console.info("[knowledge] open detail id=%s layer=%s facet=%s", h.id, h.layer, h.facet);
     setSelected(h);
   };
 
-  const kindBadge = (k: KnowledgeKind) => {
+  const layerBadge = (layerName: string) => {
     const map: Record<string, string> = {
-      playbook: "bg-emerald-900/50 text-emerald-300",
-      precedent: "bg-sky-900/50 text-sky-300",
-      incident: "bg-rose-900/50 text-rose-300",
-      artifact_ref: "bg-amber-900/50 text-amber-300",
-      shared_fact: "bg-violet-900/50 text-violet-300",
-      archive: "bg-slate-800 text-slate-400",
+      L2: "bg-emerald-900/50 text-emerald-300",
+      L3: "bg-sky-900/50 text-sky-300",
+      L1: "bg-violet-900/50 text-violet-300",
+      notes: "bg-slate-800 text-slate-400",
     };
-    return map[k] || "bg-slate-800 text-slate-400";
+    return map[layerName] || "bg-slate-800 text-slate-400";
   };
 
   return (
@@ -236,8 +232,8 @@ export function KnowledgePage({
         title="知识库"
         description={
           provider
-            ? `经验卡片 · Playbook / Precedent / Incident · 向量 ${provider}`
-            : "经验卡片检索（非 Session 原文堆砌）"
+            ? `Personal Wiki · L2×3 / L3×1.2 / L1×1 · 向量 ${provider}`
+            : "三层知识库：决策、流程、事实。日志默认不召回"
         }
         actions={
           <div className="flex flex-wrap gap-2">
@@ -270,16 +266,18 @@ export function KnowledgePage({
         }
       />
 
+      <ContentPathEditor kind="knowledge" />
+
       <form
         onSubmit={search}
         className="mb-4 flex flex-wrap gap-2 rounded-xl border border-slate-800 bg-slate-900/50 p-4"
       >
         <select
-          value={kind}
-          onChange={(e) => setKind(e.target.value)}
+          value={layer}
+          onChange={(e) => setLayer(e.target.value)}
           className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-2 text-sm"
         >
-          {KIND_OPTIONS.map((o) => (
+          {LAYER_OPTIONS.map((o) => (
             <option key={o.value} value={o.value}>
               {o.label}
             </option>
@@ -409,8 +407,9 @@ export function KnowledgePage({
               className="block w-full rounded-xl border border-slate-800 bg-slate-900/40 px-4 py-3 text-left hover:bg-slate-800/50"
             >
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
-                <span className={`rounded px-1.5 py-0.5 uppercase ${kindBadge(h.kind)}`}>
-                  {h.kind || "archive"}
+                <span className={`rounded px-1.5 py-0.5 uppercase ${layerBadge(h.layer || "")}`}>
+                  {h.layer || "?"}
+                  {h.facet ? `/${h.facet}` : ""}
                 </span>
                 <span className="uppercase">{h.runtime || "—"}</span>
                 <span>{h.agent_id || "—"}</span>

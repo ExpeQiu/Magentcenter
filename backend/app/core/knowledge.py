@@ -1,6 +1,6 @@
-"""知识库：卡片内容模型（Playbook / Precedent / Incident / ArtifactRef / SharedFact）。
+"""知识库：Personal Wiki 三层。kind 仍可读，召回按 layer 加权。
 
-检索主路径走结构化卡片摘要；原始任务全文仅作可选 archive。
+notes / archive 默认不进入检索和注入。
 """
 
 from __future__ import annotations
@@ -16,7 +16,18 @@ from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 
 from app.core.text_embed import cosine, embed_text, embedder_status, hash_embed
+from app.core.wiki_layers import (
+    LAYER_NOTES,
+    RECALL_LAYERS,
+    effective_placement,
+    find_preference,
+    kind_to_layer,
+    layer_weight,
+    namespaced_tags,
+    resolve_placement,
+)
 from app.models.db import KnowledgeRecord, TaskRecord, get_session_factory
+from app.config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +53,6 @@ CARD_KINDS = (
     "shared_fact",
 )
 
-# 注入默认检索种类（不含 archive 噪声）
-INJECT_KINDS_DEFAULT = ("playbook", "precedent", "shared_fact")
-OPS_INJECT_KINDS = ("incident", "playbook", "shared_fact")
-
 _SECRET_PATTERNS = [
     re.compile(r"(?i)(api[_-]?key|token|secret|password|passwd)\s*[:=]\s*\S+"),
     re.compile(r"(?i)bearer\s+[a-z0-9._\-]+"),
@@ -57,6 +64,8 @@ _SECRET_PATTERNS = [
 class KnowledgeHit(BaseModel):
     id: str
     kind: str = "archive"
+    layer: str = ""
+    facet: str = ""
     source_type: str
     source_id: str
     runtime: str = ""
@@ -74,6 +83,8 @@ class KnowledgeHit(BaseModel):
 
 class KnowledgeEntryCreate(BaseModel):
     kind: KnowledgeKind
+    layer: str = ""
+    facet: str = ""
     title: str
     summary: str = ""
     workspace_id: str = ""
@@ -201,10 +212,21 @@ def _content_from_card(
     return redact_secrets(text)[:MAX_CONTENT]
 
 
+def _placement_of(r: KnowledgeRecord) -> tuple[str, str]:
+    return effective_placement(
+        getattr(r, "layer", "") or "",
+        getattr(r, "facet", "") or "",
+        _record_kind(r),
+    )
+
+
 def _hit_from_record(r: KnowledgeRecord, query: str, score: float) -> KnowledgeHit:
+    layer, facet = _placement_of(r)
     return KnowledgeHit(
         id=r.id,
         kind=_record_kind(r),
+        layer=layer,
+        facet=facet,
         source_type=r.source_type or "",
         source_id=r.source_id or "",
         runtime=r.runtime or "",
@@ -221,6 +243,29 @@ def _hit_from_record(r: KnowledgeRecord, query: str, score: float) -> KnowledgeH
     )
 
 
+async def _log_near_duplicate(session, title: str, source_id: str) -> None:
+    prefix = (title or "").strip()[:24]
+    if len(prefix) < 8:
+        return
+    rows = (
+        await session.execute(
+            select(KnowledgeRecord)
+            .where(KnowledgeRecord.title.ilike(f"{prefix}%"))
+            .limit(5)
+        )
+    ).scalars().all()
+    for row in rows:
+        if row.source_id == source_id:
+            continue
+        logger.info(
+            "knowledge near-duplicate title=%r existing=%s source=%s",
+            title[:40],
+            row.id,
+            row.source_id,
+        )
+        return
+
+
 async def _upsert_entry(
     *,
     kind: str,
@@ -235,11 +280,14 @@ async def _upsert_entry(
     workspace_id: str = "",
     tags: list[str] | None = None,
     payload: dict[str, Any] | None = None,
+    layer: str = "",
+    facet: str = "",
 ) -> str:
     content = redact_secrets((content or "").strip())[:MAX_CONTENT]
     title = re.sub(r"\s+", " ", redact_secrets(title or "").strip())[:120] or source_id[:120]
     tags = tags or []
     payload = payload or {}
+    layer, facet = resolve_placement(kind, layer=layer, facet=facet)
     emb = await _embed_json(f"{title}\n{content}")
     factory = get_session_factory()
     async with factory() as session:
@@ -263,6 +311,8 @@ async def _upsert_entry(
             ).scalar_one_or_none()
         if existing:
             existing.kind = kind
+            existing.layer = layer
+            existing.facet = facet
             existing.source_type = source_type
             existing.title = title
             existing.content = content
@@ -277,11 +327,14 @@ async def _upsert_entry(
             existing.updated_at = datetime.utcnow()
             kid = existing.id
         else:
+            await _log_near_duplicate(session, title, source_id)
             kid = str(uuid.uuid4())
             session.add(
                 KnowledgeRecord(
                     id=kid,
                     kind=kind,
+                    layer=layer,
+                    facet=facet,
                     source_type=source_type,
                     source_id=source_id,
                     runtime=runtime or "",
@@ -331,7 +384,7 @@ async def distill_from_task(
     error: str = "",
     keep_archive: bool = False,
 ) -> dict[str, str]:
-    """任务结束后蒸馏卡片。成功→precedent+playbook；失败→precedent+incident。"""
+    """任务结束后按层沉淀。每条收尾写 experiences；成功有步骤写 procedural；失败写 reflections。"""
     if status and status not in ("completed", "failed", "timeout"):
         return {}
     if not (prompt or "").strip() and not (output or "").strip() and not (error or "").strip():
@@ -339,10 +392,10 @@ async def distill_from_task(
 
     summary = _rule_summary(prompt, output, error)
     title = re.sub(r"\s+", " ", redact_secrets(prompt or "").strip())[:120] or f"task:{task_id[:8]}"
-    tags = [t for t in (runtime, agent_id, status) if t]
+    topic = re.sub(r"\s+", "-", title)[:24]
     created: dict[str, str] = {}
 
-    # 先例索引（轻量）
+    exp_tags = namespaced_tags(src="task", facet="experiences", topic=topic, extra=[runtime, agent_id, status])
     precedent_payload = {
         "summary": summary,
         "task_id": task_id,
@@ -353,10 +406,12 @@ async def distill_from_task(
         title=title,
         summary=summary,
         payload=precedent_payload,
-        tags=tags,
+        tags=exp_tags,
     )
-    created["precedent"] = await _upsert_entry(
+    created["experiences"] = await _upsert_entry(
         kind="precedent",
+        layer="L2",
+        facet="experiences",
         source_type="task",
         source_id=task_id,
         title=title,
@@ -366,41 +421,50 @@ async def distill_from_task(
         session_id=session_id,
         status=status,
         workspace_id=workspace_id,
-        tags=tags,
+        tags=exp_tags,
         payload=precedent_payload,
     )
 
     if status == "completed":
         steps = _rule_steps(output)
-        playbook_payload = {
-            "problem": title,
-            "steps": steps,
-            "outcome": summary[-200:] if summary else "completed",
-            "pitfalls": [],
-            "source_refs": {"task_id": task_id, "session_id": session_id},
-        }
-        pb_content = _content_from_card(
-            kind="playbook",
-            title=f"Playbook · {title[:80]}",
-            summary=summary,
-            payload=playbook_payload,
-            tags=tags + ["playbook"],
-        )
-        created["playbook"] = await _upsert_entry(
-            kind="playbook",
-            source_type="task",
-            source_id=f"{task_id}:playbook",
-            title=f"Playbook · {title[:80]}",
-            content=pb_content,
-            agent_id=agent_id,
-            runtime=runtime,
-            session_id=session_id,
-            status=status,
-            workspace_id=workspace_id,
-            tags=tags + ["playbook"],
-            payload=playbook_payload,
-        )
+        if steps:
+            proc_tags = namespaced_tags(
+                src="task", facet="procedural", topic=topic, extra=[runtime, agent_id, "playbook"]
+            )
+            playbook_payload = {
+                "problem": title,
+                "steps": steps,
+                "outcome": summary[-200:] if summary else "completed",
+                "pitfalls": [],
+                "source_refs": {"task_id": task_id, "session_id": session_id},
+            }
+            pb_content = _content_from_card(
+                kind="playbook",
+                title=f"Playbook · {title[:80]}",
+                summary=summary,
+                payload=playbook_payload,
+                tags=proc_tags,
+            )
+            created["procedural"] = await _upsert_entry(
+                kind="playbook",
+                layer="L3",
+                facet="procedural",
+                source_type="task",
+                source_id=f"{task_id}:playbook",
+                title=f"Playbook · {title[:80]}",
+                content=pb_content,
+                agent_id=agent_id,
+                runtime=runtime,
+                session_id=session_id,
+                status=status,
+                workspace_id=workspace_id,
+                tags=proc_tags,
+                payload=playbook_payload,
+            )
     elif status in ("failed", "timeout"):
+        ref_tags = namespaced_tags(
+            src="task", facet="reflections", topic=topic, extra=[runtime, agent_id, "incident"]
+        )
         incident_payload = {
             "symptom": title,
             "root_cause": redact_secrets(error or output or "unknown")[:400],
@@ -413,10 +477,12 @@ async def distill_from_task(
             title=f"Incident · {title[:80]}",
             summary=summary,
             payload=incident_payload,
-            tags=tags + ["incident"],
+            tags=ref_tags,
         )
-        created["incident"] = await _upsert_entry(
+        created["reflections"] = await _upsert_entry(
             kind="incident",
+            layer="L2",
+            facet="reflections",
             source_type="task",
             source_id=f"{task_id}:incident",
             title=f"Incident · {title[:80]}",
@@ -426,14 +492,38 @@ async def distill_from_task(
             session_id=session_id,
             status=status,
             workspace_id=workspace_id,
-            tags=tags + ["incident"],
+            tags=ref_tags,
             payload=incident_payload,
+        )
+
+    preference = find_preference(f"{prompt}\n{output}\n{error}")
+    if preference:
+        pref_tags = namespaced_tags(src="task", facet="preferences", topic=topic)
+        pref_payload = {"summary": preference, "body": preference, "task_id": task_id}
+        created["preferences"] = await _upsert_entry(
+            kind="shared_fact",
+            layer="L1",
+            facet="preferences",
+            source_type="task",
+            source_id=f"{task_id}:preference",
+            title=f"偏好 · {title[:60]}",
+            content=redact_secrets(preference),
+            agent_id=agent_id,
+            runtime=runtime,
+            session_id=session_id,
+            status=status,
+            workspace_id=workspace_id,
+            tags=pref_tags,
+            payload=pref_payload,
         )
 
     if keep_archive:
         body = f"{prompt or ''}\n---\n{output or error or ''}".strip()
-        created["archive"] = await _upsert_entry(
+        note_tags = namespaced_tags(src="task", facet="notes", topic=topic, status="archive")
+        created["notes"] = await _upsert_entry(
             kind="archive",
+            layer="notes",
+            facet="notes",
             source_type="task",
             source_id=f"{task_id}:archive",
             title=title,
@@ -443,12 +533,12 @@ async def distill_from_task(
             session_id=session_id,
             status=status,
             workspace_id=workspace_id,
-            tags=tags + ["archive"],
+            tags=note_tags,
             payload={"task_id": task_id},
         )
 
     logger.info(
-        "knowledge distill task=%s status=%s kinds=%s workspace=%s",
+        "knowledge distill task=%s status=%s layers=%s workspace=%s",
         task_id,
         status,
         list(created.keys()),
@@ -546,8 +636,11 @@ async def create_entry(req: KnowledgeEntryCreate) -> KnowledgeHit:
         payload=payload,
         tags=req.tags,
     )
+    layer, facet = resolve_placement(kind, layer=req.layer, facet=req.facet)
     kid = await _upsert_entry(
         kind=kind,
+        layer=layer,
+        facet=facet,
         source_type=req.source_type or "manual",
         source_id=source_id,
         title=req.title,
@@ -592,22 +685,15 @@ async def list_entries(
     *,
     limit: int = 50,
     kind: str | None = None,
+    layer: str | None = None,
     workspace_id: str | None = None,
     runtime: str | None = None,
 ) -> list[KnowledgeHit]:
     kinds = [k.strip() for k in (kind or "").split(",") if k.strip()]
+    layers = [x.strip() for x in (layer or "").split(",") if x.strip()]
     factory = get_session_factory()
     async with factory() as session:
-        stmt = select(KnowledgeRecord).order_by(KnowledgeRecord.updated_at.desc()).limit(
-            max(1, min(limit, 200))
-        )
-        if len(kinds) == 1:
-            stmt = stmt.where(KnowledgeRecord.kind == kinds[0])
-        elif len(kinds) > 1:
-            stmt = stmt.where(KnowledgeRecord.kind.in_(kinds))
-        else:
-            # 默认不列 archive 原文
-            stmt = stmt.where(KnowledgeRecord.kind.in_(CARD_KINDS))
+        stmt = select(KnowledgeRecord).order_by(KnowledgeRecord.updated_at.desc()).limit(400)
         if workspace_id:
             stmt = stmt.where(
                 or_(
@@ -619,7 +705,25 @@ async def list_entries(
         if runtime:
             stmt = stmt.where(KnowledgeRecord.runtime == runtime)
         rows = (await session.execute(stmt)).scalars().all()
-    return [_hit_from_record(r, "", 1.0) for r in rows]
+    out: list[KnowledgeHit] = []
+    cap = max(1, min(limit, 200))
+    if not runtime:
+        from app.core.wiki_files import list_wiki_hits
+
+        out.extend(list_wiki_hits(layers=layers or None, limit=cap))
+    for r in rows:
+        rec_kind = _record_kind(r)
+        rec_layer, _facet = _placement_of(r)
+        if layers and rec_layer not in layers:
+            continue
+        if kinds and rec_kind not in kinds:
+            continue
+        if not layers and not kinds and rec_layer == LAYER_NOTES:
+            continue
+        out.append(_hit_from_record(r, "", 1.0))
+        if len(out) >= cap:
+            break
+    return out
 
 
 async def backfill_from_tasks(limit: int = 200) -> int:
@@ -652,6 +756,24 @@ async def backfill_from_tasks(limit: int = 200) -> int:
             count += 1
     logger.info("knowledge backfill tasks=%d distilled=%d", len(rows), count)
     return count
+
+
+async def backfill_layers() -> int:
+    """给缺 layer 的旧行补映射，不改正文。"""
+    factory = get_session_factory()
+    updated = 0
+    async with factory() as session:
+        rows = (await session.execute(select(KnowledgeRecord))).scalars().all()
+        for rec in rows:
+            if (getattr(rec, "layer", "") or "").strip():
+                continue
+            layer, facet = kind_to_layer(_record_kind(rec))
+            rec.layer = layer
+            rec.facet = facet
+            updated += 1
+        await session.commit()
+    logger.info("knowledge layer backfill updated=%d", updated)
+    return updated
 
 
 async def upsert_artifact_ref(
@@ -745,7 +867,7 @@ def format_inject_block(hits: list[KnowledgeHit], *, max_chars: int = INJECT_BLO
         "",
     ]
     for h in hits:
-        lines.append(f"### [{h.kind}] {h.title or h.source_id}")
+        lines.append(f"### [{h.kind}] {h.layer}/{h.facet} {h.title or h.source_id}".strip())
         summary = h.payload.get("summary") or h.snippet
         if summary:
             lines.append(str(summary)[:280])
@@ -786,11 +908,13 @@ async def search_knowledge(
     runtime: str | None = None,
     workspace_id: str | None = None,
     kinds: list[str] | None = None,
+    layers: list[str] | None = None,
     auto_backfill: bool = True,
     mode: str = "hybrid",
     include_archive: bool = False,
+    for_ops: bool = False,
 ) -> list[KnowledgeHit]:
-    """mode: keyword | vector | hybrid（默认）。"""
+    """mode: keyword | vector | hybrid（默认）。分数再乘层权重。"""
     q = (query or "").strip()
     if not q:
         return []
@@ -799,6 +923,7 @@ async def search_knowledge(
         tokens = [q.lower()]
     mode = mode if mode in ("keyword", "vector", "hybrid") else "hybrid"
     q_vec = await embed_text(q)
+    weight_raw = get_settings().knowledge_layer_weights
 
     factory = get_session_factory()
     async with factory() as session:
@@ -808,9 +933,10 @@ async def search_knowledge(
     if total is None and auto_backfill:
         await backfill_from_tasks()
 
-    allow_kinds = list(kinds) if kinds else list(CARD_KINDS)
-    if include_archive and "archive" not in allow_kinds:
-        allow_kinds.append("archive")
+    allow_kinds = list(kinds) if kinds else None
+    allow_layers = [x for x in (layers or []) if x]
+    if include_archive and allow_layers and LAYER_NOTES not in allow_layers:
+        allow_layers.append(LAYER_NOTES)
 
     factory = get_session_factory()
     async with factory() as session:
@@ -873,7 +999,17 @@ async def search_knowledge(
     hits: list[KnowledgeHit] = []
     for r in rows:
         kind = _record_kind(r)
-        if kind not in allow_kinds:
+        layer, facet = _placement_of(r)
+        if allow_kinds is not None and kind not in allow_kinds:
+            continue
+        if allow_layers:
+            if layer not in allow_layers:
+                continue
+        elif layer == LAYER_NOTES and not include_archive:
+            continue
+        elif layer == LAYER_NOTES and include_archive:
+            pass
+        elif layer not in RECALL_LAYERS:
             continue
         emb = _parse_embed(getattr(r, "embedding_json", "") or "")
         if not emb and (r.title or r.content):
@@ -884,24 +1020,33 @@ async def search_knowledge(
             he = hash_embed(f"{r.title}\n{r.content}")
             vec = cosine(hq, he)
         kw = _keyword_score(r.title, r.content, tokens)
-        # 卡片加权：playbook/shared_fact 略优先
-        kind_bonus = {
-            "playbook": 1.5,
-            "shared_fact": 1.2,
-            "incident": 1.3,
-            "precedent": 1.0,
-            "artifact_ref": 0.9,
-            "archive": 0.3,
-        }.get(kind, 0.5)
+        weight = layer_weight(layer, weight_raw)
+        if for_ops and facet == "reflections":
+            weight *= 1.5
+        if layer == LAYER_NOTES:
+            weight = 0.3
         if mode == "keyword":
-            score = (kw + kind_bonus) if kw > 0 else 0.0
+            base = kw if kw > 0 else 0.0
         elif mode == "vector":
-            score = vec * 10.0 + kind_bonus
+            base = vec * 10.0
         else:
-            score = kw + vec * 8.0 + kind_bonus
+            base = kw + vec * 8.0
+        score = base * weight
         if score <= 0:
             continue
         hits.append(_hit_from_record(r, q, score))
+    if not runtime:
+        from app.core.wiki_files import search_wiki_hits
+
+        hits.extend(
+            search_wiki_hits(
+                q,
+                tokens,
+                layers=allow_layers or None,
+                weight_raw=weight_raw,
+                limit=max(1, min(limit, 50)),
+            )
+        )
     hits.sort(key=lambda h: (-h.score, h.created_at or ""))
     result = hits[: max(1, min(limit, 50))]
     logger.info(
@@ -928,18 +1073,18 @@ async def build_task_inject_context(
     q = (prompt or "").strip()
     if not q:
         return "", []
-    use_kinds = list(kinds) if kinds else list(
-        OPS_INJECT_KINDS if for_ops else INJECT_KINDS_DEFAULT
-    )
+    use_layers = list(RECALL_LAYERS)
     hits = await search_knowledge(
         q,
         limit=top_k,
         runtime=runtime,
         workspace_id=workspace_id or None,
-        kinds=use_kinds,
+        kinds=list(kinds) if kinds else None,
+        layers=use_layers,
         auto_backfill=False,
         mode="hybrid",
         include_archive=False,
+        for_ops=for_ops,
     )
     block = format_inject_block(hits)
     logger.info(

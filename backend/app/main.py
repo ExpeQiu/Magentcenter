@@ -6,7 +6,20 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import agents, kanban, knowledge, orchestration, outputs, projects, system, tasks, workspaces, ws
+from app.api import (
+    agents,
+    content_roots,
+    fleet,
+    kanban,
+    knowledge,
+    orchestration,
+    outputs,
+    projects,
+    system,
+    tasks,
+    workspaces,
+    ws,
+)
 from app.api.tasks import live_tasks_router
 from app.config import get_settings
 from app.core.agent_registry import AgentRegistry
@@ -129,8 +142,10 @@ def create_app() -> FastAPI:
     app.include_router(orchestration.router)
     app.include_router(kanban.router)
     app.include_router(knowledge.router)
+    app.include_router(content_roots.router)
     app.include_router(outputs.router)
     app.include_router(system.router)
+    app.include_router(fleet.router)
     app.include_router(ws.router)
     from app.core.static_ui import mount_static_ui
 

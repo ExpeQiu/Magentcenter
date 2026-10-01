@@ -36,6 +36,9 @@ class SkillInfo(BaseModel):
     emoji: str = ""
     archived: bool = False
     runtime: str = "openclaw"
+    status: str = ""
+    category: str = ""
+    bound: bool = False
 
 
 class SkillDetail(SkillInfo):
@@ -144,6 +147,7 @@ def _parse_skill_file(skill_md: Path, skill_id: str) -> dict[str, Any]:
             "allowed_tools": [],
             "emoji": "",
             "body": "",
+            "status": "",
         }
 
     fm, body = _split_frontmatter(text)
@@ -158,6 +162,7 @@ def _parse_skill_file(skill_md: Path, skill_id: str) -> dict[str, Any]:
         "disable_model_invocation": _as_bool(fm.get("disable-model-invocation")),
         "allowed_tools": _as_str_list(fm.get("allowed-tools")),
         "emoji": _extract_emoji(fm.get("metadata")),
+        "status": _as_str(fm.get("status")).lower(),
         "body": body,
     }
 
@@ -186,6 +191,7 @@ def _entry_to_info(
         emoji=parsed["emoji"],
         archived=archived,
         runtime=runtime,
+        status=parsed.get("status") or "",
     )
 
 
@@ -195,6 +201,7 @@ def _scan_flat_root(
     runtime: str,
     include_hidden: bool,
     include_archived: bool,
+    include_draft: bool,
 ) -> list[SkillInfo]:
     skills: list[SkillInfo] = []
     for entry in sorted(root.iterdir()):
@@ -206,6 +213,8 @@ def _scan_flat_root(
         if name.startswith(HIDDEN_DIR_PREFIX) and not include_hidden:
             continue
         info = _entry_to_info(entry, skill_id=name, archived=False, runtime=runtime)
+        if info and info.status == "draft" and not include_draft:
+            continue
         if info:
             skills.append(info)
 
@@ -229,6 +238,7 @@ def _scan_nested_root(
     runtime: str,
     include_hidden: bool,
     include_archived: bool,
+    include_draft: bool,
 ) -> list[SkillInfo]:
     """Hermes 技能常为 category/skill/SKILL.md 嵌套结构。"""
     skills: list[SkillInfo] = []
@@ -257,6 +267,8 @@ def _scan_nested_root(
         info = _entry_to_info(
             entry, skill_id=skill_id, archived=archived, runtime=runtime
         )
+        if info and info.status == "draft" and not include_draft:
+            continue
         if info:
             skills.append(info)
     return skills
@@ -267,6 +279,7 @@ def scan_skills(
     *,
     include_hidden: bool = False,
     include_archived: bool = False,
+    include_draft: bool = False,
     runtime: str = "openclaw",
 ) -> list[SkillInfo]:
     run_id = uuid.uuid4().hex[:8]
@@ -292,6 +305,7 @@ def scan_skills(
             runtime=runtime,
             include_hidden=include_hidden,
             include_archived=include_archived,
+            include_draft=include_draft,
         )
     else:
         skills = _scan_flat_root(
@@ -299,6 +313,7 @@ def scan_skills(
             runtime=runtime,
             include_hidden=include_hidden,
             include_archived=include_archived,
+            include_draft=include_draft,
         )
 
     elapsed_ms = int((time.perf_counter() - t0) * 1000)
@@ -320,31 +335,60 @@ def scan_all_skills(
     *,
     openclaw_dir: str | None = None,
     hermes_dir: str | None = None,
+    catalog_dir: str | None = None,
     include_hidden: bool = False,
     include_archived: bool = False,
+    include_draft: bool = False,
+    include_catalog: bool = True,
     runtimes: list[str] | None = None,
 ) -> list[SkillInfo]:
-    enabled = runtimes or ["openclaw", "hermes"]
+    from app.core.skill_catalog import apply_catalog_categories, load_catalog_index, scan_catalog
+
+    enabled = list(runtimes or ["openclaw", "hermes"])
+    only_catalog = enabled == ["catalog"]
     out: list[SkillInfo] = []
-    if "openclaw" in enabled:
+    if not only_catalog and "openclaw" in enabled:
         out.extend(
             scan_skills(
                 openclaw_dir,
                 include_hidden=include_hidden,
                 include_archived=include_archived,
+                include_draft=include_draft,
                 runtime="openclaw",
             )
         )
-    if "hermes" in enabled:
+    if not only_catalog and "hermes" in enabled:
         out.extend(
             scan_skills(
                 hermes_dir,
                 include_hidden=include_hidden,
                 include_archived=include_archived,
+                include_draft=include_draft,
                 runtime="hermes",
             )
         )
-    return out
+    catalog: list[SkillInfo] = []
+    want_catalog = bool(
+        include_catalog
+        and catalog_dir
+        and (only_catalog or set(enabled) == {"openclaw", "hermes"})
+    )
+    if want_catalog:
+        catalog = scan_catalog(catalog_dir, include_archived=include_archived)
+    bound_names = {item.name for item in catalog}
+    # 草稿和运行时独有技能保留；与初始技能同名的不重复出现。
+    kept = [item for item in out if item.status == "draft" or item.name not in bound_names]
+    if catalog_dir:
+        index = load_catalog_index(Path(catalog_dir).expanduser())
+        apply_catalog_categories(kept, index)
+    merged = catalog + kept
+    logger.info(
+        "skills merged catalog=%d runtime=%d total=%d",
+        len(catalog),
+        len(kept),
+        len(merged),
+    )
+    return merged
 
 
 def get_skill(
@@ -354,12 +398,18 @@ def get_skill(
     include_archived: bool = True,
     runtime: str = "openclaw",
     hermes_skills_dir: str | None = None,
+    catalog_dir: str | None = None,
 ) -> SkillDetail | None:
-    root = (
-        _hermes_skills_root(hermes_skills_dir or skills_dir)
-        if runtime == "hermes"
-        else _default_skills_root(skills_dir)
-    )
+    if runtime == "catalog":
+        if not catalog_dir:
+            return None
+        root = Path(catalog_dir).expanduser()
+    else:
+        root = (
+            _hermes_skills_root(hermes_skills_dir or skills_dir)
+            if runtime == "hermes"
+            else _default_skills_root(skills_dir)
+        )
     # 禁止路径穿越
     if ".." in skill_id.split("/"):
         return None
@@ -388,6 +438,9 @@ def get_skill(
             emoji=parsed["emoji"],
             archived=archived,
             runtime=runtime,
+            status=parsed.get("status") or "",
+            category=entry.parent.name if runtime == "catalog" else "",
+            bound=runtime == "catalog",
             body_preview=parsed["body"][:BODY_PREVIEW_CHARS],
             skill_md_path=str(skill_md),
         )

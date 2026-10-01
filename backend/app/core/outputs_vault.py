@@ -118,9 +118,17 @@ def _unescape_fs_path(raw: str) -> str:
     return s.replace("\\ ", " ").replace("\\~", "~")
 
 
+def _primary_raw(settings: Settings | None = None) -> str:
+    """显式 Settings 用于测试；进程内读取以控制台保存的目录为准。"""
+    if settings is not None:
+        return _unescape_fs_path(settings.outputs_vault_root or "")
+    from app.core.content_roots import outputs_dir
+
+    return outputs_dir()
+
+
 def _vault_root(settings: Settings | None = None) -> Path:
-    s = settings or get_settings()
-    raw = _unescape_fs_path(s.outputs_vault_root or "")
+    raw = _primary_raw(settings)
     if not raw:
         raise OutputsVaultError("OUTPUTS_VAULT_ROOT 未配置", status_code=503)
     root = Path(raw).expanduser()
@@ -198,7 +206,7 @@ def extra_vault_specs(settings: Settings | None = None) -> list[dict]:
     """配置里的额外根（含不可读项），供 status 展示。"""
     s = settings or get_settings()
     rows = _cached_extra_specs(
-        _unescape_fs_path(s.outputs_vault_root or ""),
+        _primary_raw(settings),
         s.outputs_vault_extra or "",
     )
     return [
@@ -217,9 +225,8 @@ def extra_vault_roots(settings: Settings | None = None) -> dict[str, Path]:
 
 
 def vault_status(settings: Settings | None = None) -> dict:
-    s = settings or get_settings()
-    raw = _unescape_fs_path(s.outputs_vault_root or "")
-    extras = extra_vault_specs(s)
+    raw = _primary_raw(settings)
+    extras = extra_vault_specs(settings)
     extra_public = [
         {"name": x["name"], "readable": x["readable"], "message": x["message"]}
         for x in extras

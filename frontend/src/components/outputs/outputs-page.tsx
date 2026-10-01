@@ -12,6 +12,7 @@ import {
   loadScopes,
   ScopeModal,
 } from "@/components/outputs/scope-modal";
+import { ContentPathEditor } from "@/components/settings/content-path-editor";
 
 type ViewMode = "recent" | "tree";
 type SourceFilter = "all" | "openclaw" | "hermes";
@@ -302,12 +303,10 @@ export function OutputsPage() {
     return (
       <>
         <PageHeader title="输出物" description={vaultLabel} />
+        <ContentPathEditor kind="outputs" onSaved={() => void refreshStatus()} />
         <EmptyState
           title="Vault 不可读"
-          description={
-            status.message ||
-            "请在 .env 配置 OUTPUTS_VAULT_ROOT 指向 Obsidian expe 目录"
-          }
+          description={status.message || "修改上方目录，指向本机 iCloud 里的 Obsidian expe"}
           action={
             <button
               type="button"
@@ -351,6 +350,14 @@ export function OutputsPage() {
             </button>
           </>
         }
+      />
+
+      <ContentPathEditor
+        kind="outputs"
+        onSaved={() => {
+          void refreshStatus();
+          void loadList();
+        }}
       />
 
       <ScopeModal

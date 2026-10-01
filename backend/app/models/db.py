@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, Integer, String, Text, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -76,6 +76,7 @@ class TaskRecord(Base):
     duration_ms: Mapped[int] = mapped_column(Integer, default=0)
     start_date: Mapped[str] = mapped_column(String(16), default="")
     due_date: Mapped[str] = mapped_column(String(16), default="")
+    node_id: Mapped[str] = mapped_column(String(64), index=True, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -125,13 +126,40 @@ class AlertRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class FleetNodeRecord(Base):
+    """云端协调器上的设备连接器。令牌只存哈希。"""
+
+    __tablename__ = "fleet_nodes"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, default="")
+    runtimes_json: Mapped[str] = mapped_column(Text, default="[]")
+    hostname: Mapped[str] = mapped_column(String(128), default="")
+    platform: Mapped[str] = mapped_column(String(64), default="")
+    mode: Mapped[str] = mapped_column(String(16), default="plugin")
+    webhook_url: Mapped[str] = mapped_column(Text, default="")
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    bound: Mapped[int] = mapped_column(Integer, default=0)
+    agents_json: Mapped[str] = mapped_column(Text, default="[]")
+    seen_json: Mapped[str] = mapped_column(Text, default="[]")
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    load: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
 class KnowledgeRecord(Base):
-    """知识卡片：Playbook / Precedent / Incident / ArtifactRef / SharedFact (+ archive)。"""
+    """知识条目。kind 保留旧卡片；layer/facet 是 Personal Wiki 坐标。"""
 
     __tablename__ = "knowledge_entries"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     kind: Mapped[str] = mapped_column(String(32), index=True, default="archive")
+    layer: Mapped[str] = mapped_column(String(16), index=True, default="")
+    facet: Mapped[str] = mapped_column(String(32), index=True, default="")
     source_type: Mapped[str] = mapped_column(String(32), index=True, default="task")
     source_id: Mapped[str] = mapped_column(String(256), index=True, default="")
     runtime: Mapped[str] = mapped_column(String(32), index=True, default="")
@@ -143,6 +171,33 @@ class KnowledgeRecord(Base):
     status: Mapped[str] = mapped_column(String(32), default="")
     tags_json: Mapped[str] = mapped_column(Text, default="[]")
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    embedding_json: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class SkillRecord(Base):
+    """自挖掘技能账本。正文在运行时 SKILL.md，这里只存状态和用量。"""
+
+    __tablename__ = "skill_records"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    runtime: Mapped[str] = mapped_column(String(32), index=True, default="openclaw")
+    description: Mapped[str] = mapped_column(Text, default="")
+    trigger_keywords: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), index=True, default="draft")
+    skill_class: Mapped[str] = mapped_column(String(16), default="flow")
+    source_task: Mapped[str] = mapped_column(String(64), default="")
+    source_session: Mapped[str] = mapped_column(String(128), default="")
+    wiki_ref: Mapped[str] = mapped_column(String(64), default="")
+    capture_id: Mapped[str] = mapped_column(String(64), default="")
+    usage_count: Mapped[int] = mapped_column(Integer, default=0)
+    success_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    success_count: Mapped[int] = mapped_column(Integer, default=0)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
     embedding_json: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -170,6 +225,13 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("knowledge_entries", "workspace_id", "VARCHAR(64) DEFAULT ''"),
     ("knowledge_entries", "tags_json", "TEXT DEFAULT '[]'"),
     ("knowledge_entries", "payload_json", "TEXT DEFAULT '{}'"),
+    ("tasks", "node_id", "VARCHAR(64) DEFAULT ''"),
+    ("fleet_nodes", "bound", "INTEGER DEFAULT 0"),
+    ("fleet_nodes", "agents_json", "TEXT DEFAULT '[]'"),
+    ("fleet_nodes", "seen_json", "TEXT DEFAULT '[]'"),
+    ("fleet_nodes", "workspace_id", "VARCHAR(64) DEFAULT ''"),
+    ("knowledge_entries", "layer", "VARCHAR(16) DEFAULT ''"),
+    ("knowledge_entries", "facet", "VARCHAR(32) DEFAULT ''"),
 ]
 
 

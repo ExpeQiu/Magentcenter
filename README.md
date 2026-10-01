@@ -51,6 +51,14 @@ echo "AI_MOCK_MODE=true" >> .env
 | GET | `/api/tasks/{id}` | 任务详情 |
 | GET | `/api/tasks/{id}/stream` | SSE 事件流 |
 | WS | `/ws/tasks/{id}` | WebSocket 事件流 |
+| GET | `/api/fleet/nodes` | 已上报设备、绑定的智能体、在线状态 |
+| GET | `/api/fleet/scan` | 扫描协调器本机的 OpenClaw / Hermes |
+| POST | `/api/fleet/bind` | 把勾选的智能体绑定到设备 |
+| DELETE | `/api/fleet/nodes/{id}` | 解除绑定 |
+| POST | `/api/fleet/enroll` | 设备上报本机扫描结果并领取令牌 |
+| POST | `/api/fleet/heartbeat` | 插件心跳（`X-Node-Token`） |
+| POST | `/api/fleet/claim` | 插件领取一条任务 |
+| POST | `/api/fleet/tasks/{id}/finish` | 设备回报结果 |
 
 ## 配置
 
@@ -60,12 +68,38 @@ echo "AI_MOCK_MODE=true" >> .env
 - `DEFAULT_RUNTIME=openclaw` — 未指定 runtime 时的默认值
 - `AI_MOCK_MODE=true` — 跳过真实 CLI 调用
 - `EMBEDDING_PROVIDER=hash|openai|http` — 知识库向量（缺省 hash）
-- `KNOWLEDGE_INJECT_ENABLED` / `KNOWLEDGE_INJECT_TOP_K` — 任务前注入经验卡片
-- 知识库内容模型见 [guide/knowledge.md](guide/knowledge.md)
+- `KNOWLEDGE_INJECT_ENABLED` / `KNOWLEDGE_INJECT_TOP_K` — 任务前按层加权召回
+- 知识库见 [guide/knowledge.md](guide/knowledge.md)，技能自挖掘见 [guide/skills.md](guide/skills.md)
 - `ALERT_PROFILE=default` — 告警规则环境
 - `OPENCLAW_*` / `HERMES_*` — 各栈可执行文件与超时
 - `OUTPUTS_VAULT_ROOT` — Obsidian expe 库根（控制台「输出物」范围选择起点）
 - `OUTPUTS_VAULT_EXTRA` — 额外只读根（逗号分隔绝对路径，以文件夹名出现在一级目录）
+
+## 多端调度
+
+云端跑协调器。打开 `/{工作区}/fleet`，点「扫描本机」勾选智能体后绑定。家里的机器在 NAT 后面，每台跑连接器：它扫描自己的智能体并上报，控制台里确认绑定后才会领任务。给智能体分配任务在「任务」页，不在多端页。
+
+云端 `.env`：
+
+```bash
+HOST=0.0.0.0
+FLEET_ENROLL_TOKEN=换成一长串随机串
+```
+
+其他设备安装独立包 [fleet-edge](fleet-edge/README.md)（只含连接器，不需要整个仓库）：
+
+```bash
+pip install ./fleet-edge
+FLEET_ENROLL_TOKEN=与云端相同 \
+AGENTCENTER_URL=http://云端:8013 \
+fleet-edge
+```
+
+在本仓库里也可以 `./scripts/fleet-edge.sh`，它转调同一个包。
+
+云端协调器读不到本机 iCloud。`./scripts/sync-waytoai.sh` 把 `~/Library/Mobile Documents/com~apple~CloudDocs/WaytoAI` 同步到服务器 `/opt/agentcenter/WaytoAI`，并把知识库、技能目录指到其中的 `personalwiki` 和 `skills`。`./scripts/sync-waytoai.sh --install` 之后每 15 分钟同步一次。日志在 `logs/sync-waytoai.log`。依赖目录和构建产物不会上传。
+
+设备标识默认用主机名。有公网地址时加 `--mode webhook --webhook-url http://设备:8766/fleet`，云端按飞书同类的 HMAC 签名推送。日志在 `~/.agentcenter/logs/fleet-edge.log`。`FLEET_MOCK=1` 只验证领取，不调用本机 CLI。绑定之后，在「任务」里选择该设备上的智能体即可分配。CLI 仍可用 `./scripts/ac tasks run <agent> "ping" --runtime hermes --node <设备>`。
 
 ## CLI
 

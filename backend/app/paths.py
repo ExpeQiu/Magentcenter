@@ -23,6 +23,7 @@ LEGACY_PREFIXES = frozenset(
         "sessions",
         "knowledge",
         "outputs",
+        "fleet",
     }
 )
 

@@ -113,8 +113,12 @@ class CreateTaskRequest(BaseModel):
     due_date: str = ""
     timeout: int | None = None
     resume_session_id: str | None = None
+    # 空或 local = 协调器本机执行；auto = 在线设备；其它 = 指定设备
+    node_id: str = ""
     # None = 跟随 Settings.knowledge_inject_enabled
     inject_knowledge: bool | None = None
+    # 高风险且召回为空时仍派发，但记下「已跳过门禁」
+    skip_knowledge_gate: bool = False
 
 
 class UpdateTaskRequest(BaseModel):
@@ -163,6 +167,7 @@ class TaskInfo(BaseModel):
     duration_ms: int = 0
     start_date: str = ""
     due_date: str = ""
+    node_id: str = ""
     created_at: datetime
     updated_at: datetime
 

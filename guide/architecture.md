@@ -68,7 +68,7 @@
 
 ### 输出物（Outputs）
 
-- 控制台页 `/{workspace}/outputs`：只读索引 Obsidian `expe` 库（默认 `…/Documents/expe`）；`OUTPUTS_VAULT_EXTRA` 可追加 iCloud/本地目录，以文件夹名出现在一级
+- 控制台页 `/{workspace}/outputs`：只读索引 Obsidian `expe` 库，默认本机 iCloud `…/iCloud~md~obsidian/Documents/expe`。页面上可以改目录，空路径恢复默认，记在 `data/content_roots.json`。`OUTPUTS_VAULT_EXTRA` 可追加其他目录，以文件夹名出现在一级
 - 「定义范围」从一级目录（Document / Github / openclaw / 额外根 等）逐级勾选
 - 列表：全部普通文件；跳过 `.obsidian` / `.git` 等系统目录
 - 预览：Markdown 渲染；其它文本原文；二进制仅展示元信息
@@ -76,15 +76,36 @@
 - 来源标签：`HermesCenter/**` → hermes，其余 → openclaw
 - 与知识库（SQLite 检索）并列，不合并
 
-### 知识库（卡片内容模型）
+### 知识库（Personal Wiki）
 
-详见 [knowledge.md](./knowledge.md)。
+详见 [knowledge.md](./knowledge.md)，决策见 ADR-003。
 
-- **真源种类**：`playbook` / `precedent` / `incident` / `artifact_ref` / `shared_fact`（`archive` 仅手工归档，默认不检索）
-- **划界**：运行时 `MEMORY.md` / Skills / Outputs 不进中心检索主路径；中心库做跨栈机构记忆
-- **闭环**：任务完成 → 蒸馏卡片；任务创建前 → Top-K 注入 `system_prompt`（`KNOWLEDGE_INJECT_*`）
-- **字段**：`kind` / `workspace_id` / `tags_json` / `payload_json` + hybrid 检索
+- **三层**：L2 模式与决策 ×3.0、L3 流程与工具 ×1.2、L1 事实 ×1.0；`notes` 默认不召回。子目录对齐 Personal Wiki v1.0
+- **路由**：写入和召回走同一张表；旧 `playbook` 等 kind 仍可读并映射
+- **任务五步**：高风险门禁、软召回、打标、复盘、跨源查询。自动召回只对高风险
+- **划界**：运行时 `MEMORY.md` / Skill 正文 / Outputs 不进中心检索
 - **脱敏**：入库与注入前 redact token / webhook / `sk-` 等
+
+### 技能（目录 + 自挖掘）
+
+详见 [skills.md](./skills.md)。
+
+- **正文**：仍在 OpenClaw / Hermes 技能目录，中心扫描、安装、下线
+- **五段引擎**：捕获 → 提炼 → 验证 → 存储 → 检索。显式「做成技能」才提炼；任务成功只写入 `_captured`
+- **调用**：只有 `verified` 注入下次任务。决策类 ×3.0，流程类 ×1.2。失败三次进 `_archive`
+- **账本**：SQLite 只存触发词、状态、来源、用量；与 Wiki L3 `tools` 互相留指针
+
+## 多端调度
+
+云端只做协调器。设备名册来自扫描和绑定，不写死。
+
+- 本机：控制台 `/{workspace}/fleet` 扫描协调器上的 OpenClaw / Hermes，勾选后绑定。绑定的智能体由协调器本机执行
+- 其他设备：安装独立包 `fleet-edge/`（`pip install` 后运行 `fleet-edge`）。它在 NAT 后扫描本机智能体并上报。控制台里对待绑定设备勾选确认
+- 侧栏按设备名切换当前终端。多端页和新建任务都跟着这台设备走
+- 给智能体分配任务只在「任务」里做。已绑定设备上的智能体会出现在新建任务的列表中，并带到对应设备
+- `node_id=auto` 只选当前在线、且已绑定该智能体的设备。指定离线设备时任务排队，等连接器来领
+- 设备地址能被云端访问时，可用 webhook（签名头 `X-Fleet-Timestamp` + `X-Fleet-Signature`，算法与飞书机器人相同）
+- 令牌只存哈希。注册令牌 `FLEET_ENROLL_TOKEN`，设备令牌落在 `~/.agentcenter/<node>.token`
 
 ## 分期路线
 
@@ -99,6 +120,8 @@
 - **Phase 9**：哈希向量检索；告警规则落盘；Session 消息级索引
 - **Phase 10**：可选 Embedding HTTP；告警多环境 profile；知识库独立页
 - **Phase 11**：输出物 Tab（vault 目录/最近/预览）
-- **Phase 12（当前）**：知识库内容模型（卡片蒸馏 + 任务前注入 + workspace 字段 + 划界文档）
+- **Phase 12**：知识库内容模型（卡片蒸馏 + 任务前注入 + workspace 字段 + 划界文档）
 - **Phase 13**：桌面端 Tauri 2 DMG（静态前端 + FastAPI sidecar，见 ADR-002）
-- **Phase 14（下一步）**：Outputs→ArtifactRef 批量建指；Embedding 批量重嵌入；告警 profile 导入导出；卡片质量评分
+- **Phase 14**：Outputs→ArtifactRef 批量建指；Embedding 批量重嵌入；告警 profile 导入导出；卡片质量评分
+- **Phase 15**：多端只做扫描和绑定。给智能体的任务统一从「任务」发出
+- **Phase 16（当前）**：知识库改为 Personal Wiki 三层加权召回；技能捕获 / 提炼 / 验证已按 ADR-003 落地

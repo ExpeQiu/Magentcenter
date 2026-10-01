@@ -16,6 +16,8 @@ export interface AgentInfo {
   identity_emoji: string;
   is_default: boolean;
   runtime: RuntimeName;
+  node_id?: string;
+  node_name?: string;
 }
 
 export interface WorkspaceInfo {
@@ -42,8 +44,44 @@ export interface TaskInfo {
   duration_ms: number;
   start_date: string;
   due_date: string;
+  node_id?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface FleetAgent {
+  id: string;
+  name: string;
+  runtime: RuntimeName;
+  model: string;
+}
+
+export interface FleetScan {
+  node_id: string;
+  hostname: string;
+  platform: string;
+  name: string;
+  agents: FleetAgent[];
+}
+
+export interface FleetNode {
+  id: string;
+  name: string;
+  runtimes: string[];
+  agents: FleetAgent[];
+  seen: FleetAgent[];
+  hostname: string;
+  platform: string;
+  mode: "plugin" | "webhook" | "local";
+  webhook_url: string;
+  online: boolean;
+  enrolled: boolean;
+  bound: boolean;
+  workspace_id: string;
+  last_seen: string | null;
+  load: number | null;
+  running_count: number;
+  queued_count: number;
 }
 
 export interface TaskListResponse {
@@ -75,6 +113,33 @@ export interface SkillInfo {
   emoji?: string;
   archived?: boolean;
   runtime?: RuntimeName | string;
+  status?: string;
+  category?: string;
+  bound?: boolean;
+}
+
+export interface SkillCapture {
+  capture_id: string;
+  task_id?: string;
+  runtime?: string;
+  task_summary?: string;
+  explicit?: boolean;
+  refined?: boolean;
+  path?: string;
+  timestamp?: string;
+}
+
+export interface SkillMineRecord {
+  id?: string;
+  name: string;
+  runtime: string;
+  description?: string;
+  status: string;
+  skill_class?: string;
+  capture_id?: string;
+  fail_count?: number;
+  archived?: boolean;
+  confidence?: number;
 }
 
 export interface KanbanBoard {
@@ -161,6 +226,8 @@ export type KnowledgeKind =
 export interface KnowledgeHit {
   id: string;
   kind: KnowledgeKind;
+  layer?: string;
+  facet?: string;
   source_type: string;
   source_id: string;
   runtime: string;

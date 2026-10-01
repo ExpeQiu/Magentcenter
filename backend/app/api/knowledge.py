@@ -18,6 +18,7 @@ from app.core.knowledge import (
     list_entries,
     search_knowledge,
     backfill_from_tasks,
+    backfill_layers,
     upsert_artifact_ref,
 )
 from app.core.knowledge_vault_mine import mine_vault_docs
@@ -65,7 +66,8 @@ async def knowledge_status():
             "shared_fact",
             "archive",
         ],
-        "inject_default_kinds": ["playbook", "precedent", "shared_fact"],
+        "layers": ["L2", "L3", "L1", "notes"],
+        "inject_default_layers": ["L2", "L3", "L1"],
     }
 
 
@@ -76,18 +78,23 @@ async def knowledge_search(
     runtime: str | None = Query(None, description="openclaw|hermes"),
     workspace_id: str | None = Query(None),
     kind: str | None = Query(None, description="逗号分隔 kind 过滤"),
+    layer: str | None = Query(None, description="逗号分隔 L2,L3,L1,notes"),
     mode: str = Query("hybrid", description="keyword|vector|hybrid"),
     include_archive: bool = Query(False),
 ):
     if runtime and runtime not in ("openclaw", "hermes"):
         runtime = None
     kinds = [k.strip() for k in (kind or "").split(",") if k.strip()] or None
+    layers = [x.strip() for x in (layer or "").split(",") if x.strip()] or None
+    if layers and "notes" in layers:
+        include_archive = True
     hits = await search_knowledge(
         q,
         limit=limit,
         runtime=runtime,
         workspace_id=workspace_id,
         kinds=kinds,
+        layers=layers,
         mode=mode,
         include_archive=include_archive,
     )
@@ -105,16 +112,28 @@ async def knowledge_search(
 async def knowledge_list(
     limit: int = Query(50, ge=1, le=200),
     kind: str | None = None,
+    layer: str | None = None,
     workspace_id: str | None = None,
     runtime: str | None = None,
 ):
     return await list_entries(
-        limit=limit, kind=kind, workspace_id=workspace_id, runtime=runtime
+        limit=limit,
+        kind=kind,
+        layer=layer,
+        workspace_id=workspace_id,
+        runtime=runtime,
     )
 
 
 @router.get("/entries/{entry_id}", response_model=KnowledgeHit)
 async def knowledge_get(entry_id: str = Path(...)):
+    if entry_id.startswith("wiki:"):
+        from app.core.wiki_files import get_wiki_hit
+
+        wiki_hit = get_wiki_hit(entry_id)
+        if not wiki_hit:
+            raise HTTPException(status_code=404, detail="entry not found")
+        return wiki_hit
     hit = await get_entry(entry_id)
     if not hit:
         raise HTTPException(status_code=404, detail="entry not found")
@@ -174,7 +193,13 @@ async def knowledge_inject_preview(
 @router.post("/backfill")
 async def knowledge_backfill(limit: int = Query(200, ge=1, le=1000)):
     n = await backfill_from_tasks(limit=limit)
-    return {"indexed": n, "status": "ok", "embedding": embedder_status()}
+    layers_filled = await backfill_layers()
+    return {
+        "indexed": n,
+        "layers_filled": layers_filled,
+        "status": "ok",
+        "embedding": embedder_status(),
+    }
 
 
 @router.post("/mine-vault")
