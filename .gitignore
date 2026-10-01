@@ -19,3 +19,6 @@ frontend/out/
 __pycache__/
 *.pyc
 .DS_Store
+
+# macOS resource fork files
+._*

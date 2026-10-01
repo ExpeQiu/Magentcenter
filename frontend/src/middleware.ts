@@ -27,5 +27,6 @@ export const config = {
     "/autopilots/:path*",
     "/skills/:path*",
     "/kanban/:path*",
+    "/cyber/:path*",
   ],
 };

@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import agents, kanban, knowledge, orchestration, outputs, projects, system, tasks, workspaces, ws
+from app.api.tasks import live_tasks_router
 from app.config import get_settings
 from app.core.agent_registry import AgentRegistry
 from app.core import projects as project_service
@@ -124,6 +125,7 @@ def create_app() -> FastAPI:
     app.include_router(workspaces.router)
     app.include_router(projects.router)
     app.include_router(tasks.router)
+    app.include_router(tasks.live_tasks_router)
     app.include_router(orchestration.router)
     app.include_router(kanban.router)
     app.include_router(knowledge.router)

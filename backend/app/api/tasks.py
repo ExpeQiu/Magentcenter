@@ -154,3 +154,32 @@ async def retry_task(task_id: str, request: Request) -> TaskInfo:
         return await tm.retry_task(task_id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# 独立 router 用于 /api/live-tasks（前端调用，结构与 /api/tasks 一致但只含 live sessions）
+live_tasks_router = APIRouter(prefix="/api", tags=["live-tasks"])
+
+
+@live_tasks_router.get("/live-tasks", response_model=TaskListResponse)
+async def list_live_tasks(
+    request: Request,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=100),
+    status: str | None = Query("running"),
+    agent_id: str | None = None,
+    workspace_id: str | None = None,
+) -> TaskListResponse:
+    """仅返回从 OpenClaw/Hermes 活跃 session 映射出的实时任务。"""
+    monitor = request.app.state.monitor
+    sessions, _ = await monitor.get_sessions(limit=200)
+    live = collect_live_tasks(
+        sessions,
+        known_session_ids=set(),
+        agent_id=agent_id,
+        status=status or "running",
+    )
+    total = len(live)
+    start = (page - 1) * page_size
+    end = start + page_size
+    items = live[start:end]
+    return TaskListResponse(items=items, total=total, page=page, page_size=page_size)
