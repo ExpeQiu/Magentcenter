@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/super-ai", tags=["super-ai"])
 
 @router.post("/turn", response_model=SuperAiTurnResponse)
 async def turn(req: SuperAiTurnRequest, request: Request) -> SuperAiTurnResponse:
-    return await handle_turn(
+    result = await handle_turn(
         req.text,
         workspace_slug=req.workspace_slug,
         pending=req.pending,
@@ -32,6 +32,25 @@ async def turn(req: SuperAiTurnRequest, request: Request) -> SuperAiTurnResponse
         task_manager=request.app.state.task_manager,
         monitor=request.app.state.monitor,
     )
+    from app.core.chain import append_chain
+
+    pending_prompt = req.pending.prompt if req.pending else ""
+    await append_chain(
+        kind="turn",
+        run_id=result.run_id,
+        task_id=result.task_id,
+        actor_id="console",
+        channel="web",
+        intent=result.intent,
+        status=result.task_status,
+        summary=req.text,
+        detail={
+            "service": result.service,
+            "href": result.href,
+            "pending_prompt": pending_prompt,
+        },
+    )
+    return result
 
 
 @router.post("/device/enroll", response_model=DeviceEnrollResponse)
@@ -43,6 +62,7 @@ async def device_enroll(req: DeviceEnrollRequest, request: Request) -> DeviceEnr
             expected_token=settings.fleet_enroll_token,
             device_id=req.device_id,
             name=req.name,
+            platform=req.platform,
         )
     except FleetAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc
@@ -66,6 +86,7 @@ async def device_say(
             registry=request.app.state.registry,
             task_manager=request.app.state.task_manager,
             monitor=request.app.state.monitor,
+            channel=req.channel,
         )
     except DeviceAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc

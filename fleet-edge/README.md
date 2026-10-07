@@ -2,6 +2,8 @@
 
 装在跑 OpenClaw 或 Hermes 的机器上。它扫描本机智能体，和云端握手后绑定这些资源，并取回其他端的资源与能力，再领取任务在本机执行。不需要克隆整个仓库。
 
+只说话、不跑智能体的板子不要装这个包。那种设备走 `POST /api/super-ai/device/enroll`，模式是 `voice`，固件在仓库 `firmware/esp32/super_ai/`。
+
 ```bash
 pip install .
 export FLEET_ENROLL_TOKEN=与云端相同

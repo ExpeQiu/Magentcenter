@@ -30,7 +30,7 @@ CRON_ALERT_INTERVAL=300
 
 2. 重启 AgentCenter：
 ```bash
-cd ~/Mgit/AgentCenter && ./scripts/stop-all.sh && ./scripts/start-all.sh
+./scripts/stop.sh && ./scripts/start-all.sh
 ```
 
 ## 验证告警

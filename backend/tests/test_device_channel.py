@@ -128,3 +128,56 @@ def test_voice_device_talks_and_collects_task(db):
             )
 
     asyncio.run(scenario())
+
+
+def test_desktop_channel_keeps_longer_reply(db, monkeypatch):
+    from app.models.db import FleetNodeRecord, get_session_factory
+    from app.models.schemas import SuperAiTurnResponse
+
+    async def scenario():
+        await create_tables()
+        enrolled = await enroll_device(
+            enroll_token="secret",
+            expected_token="secret",
+            device_id="ox-steward",
+            name="桌面小牛",
+            platform="desktop",
+        )
+        factory = get_session_factory()
+        async with factory() as session:
+            rec = await session.get(FleetNodeRecord, "ox-steward")
+            assert rec is not None
+            assert rec.platform == "desktop"
+            assert rec.mode == "voice"
+
+        long = "甲" * 600
+
+        async def fake_turn(*args, **kwargs):
+            return SuperAiTurnResponse(run_id="r1", reply=long, intent="help")
+
+        monkeypatch.setattr("app.core.device_channel.handle_turn", fake_turn)
+        desktop = await device_turn(
+            enrolled["device_token"],
+            "你好",
+            workspace_slug="cyber",
+            pending=None,
+            registry=_Registry(),
+            task_manager=_Tasks(),
+            monitor=_Monitor(),
+            channel="desktop",
+        )
+        assert len(desktop.reply) == 600
+        voice = await device_turn(
+            enrolled["device_token"],
+            "你好",
+            workspace_slug="cyber",
+            pending=None,
+            registry=_Registry(),
+            task_manager=_Tasks(),
+            monitor=_Monitor(),
+            channel="voice",
+        )
+        assert len(voice.reply) == 480
+        assert voice.reply.endswith("…")
+
+    asyncio.run(scenario())

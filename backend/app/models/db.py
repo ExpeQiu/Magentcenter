@@ -83,6 +83,25 @@ class TaskRecord(Base):
     )
 
 
+class ChainRecord(Base):
+    """跨设备信息链。一条任务从开口到回写的经过都在这里。"""
+
+    __tablename__ = "chain_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    kind: Mapped[str] = mapped_column(String(32), index=True, default="")
+    run_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    actor_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    target_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    channel: Mapped[str] = mapped_column(String(16), default="")
+    intent: Mapped[str] = mapped_column(String(32), default="")
+    status: Mapped[str] = mapped_column(String(32), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    detail_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class TaskEventRecord(Base):
     __tablename__ = "task_events"
 

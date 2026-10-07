@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.api import (
     agents,
+    chain,
     content_roots,
     fleet,
     kanban,
@@ -147,6 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(outputs.router)
     app.include_router(system.router)
     app.include_router(super_ai.router)
+    app.include_router(chain.router)
     app.include_router(fleet.router)
     app.include_router(ws.router)
     from app.core.static_ui import mount_static_ui

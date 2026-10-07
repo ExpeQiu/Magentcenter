@@ -96,3 +96,20 @@ body {
 .md-preview img {
   @apply my-3 max-w-full rounded-lg;
 }
+
+@keyframes fleet-flow {
+  to {
+    stroke-dashoffset: -28;
+  }
+}
+
+.fleet-edge-live {
+  stroke-dasharray: 5 9;
+  animation: fleet-flow 1.8s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fleet-edge-live {
+    animation: none;
+  }
+}

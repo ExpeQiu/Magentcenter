@@ -257,6 +257,7 @@ class DeviceEnrollRequest(BaseModel):
     enroll_token: str
     device_id: str
     name: str = ""
+    platform: Literal["esp32", "desktop"] = "esp32"
 
 
 class DeviceEnrollResponse(BaseModel):
@@ -269,6 +270,7 @@ class DeviceTurnRequest(BaseModel):
     text: str = ""
     workspace_slug: str = "cyber"
     pending: SuperAiPending | None = None
+    channel: Literal["voice", "desktop"] = "voice"
 
 
 class DeviceTaskResponse(BaseModel):
@@ -276,3 +278,18 @@ class DeviceTaskResponse(BaseModel):
     status: str
     done: bool
     reply: str
+
+
+class ChainEvent(BaseModel):
+    id: int
+    kind: str
+    run_id: str = ""
+    task_id: str = ""
+    actor_id: str = ""
+    target_id: str = ""
+    channel: str = ""
+    intent: str = ""
+    status: str = ""
+    summary: str = ""
+    detail: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime

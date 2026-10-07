@@ -318,6 +318,16 @@ async def enroll(
         info["bound"],
         hostname or "-",
     )
+    from app.core.chain import append_chain
+
+    await append_chain(
+        kind="enroll",
+        actor_id=node_id,
+        channel=info["mode"],
+        status="connector",
+        summary=name or node_id,
+        detail={"platform": platform or "", "agents": len(seen)},
+    )
     return {**info, "node_id": node_id, "node_token": token}
 
 
@@ -328,8 +338,9 @@ async def enroll_voice(
     device_id: str,
     name: str = "",
     hostname: str = "",
+    platform: str = "esp32",
 ) -> dict[str, str]:
-    """语音终端注册。不扫描智能体，也不领任务，只换一张设备令牌。"""
+    """在场终端注册。不扫描智能体，也不领任务，只换一张设备令牌。"""
     if not expected_token:
         raise FleetAuthError("fleet enroll token is not configured")
     if not hmac.compare_digest(enroll_token or "", expected_token):
@@ -362,12 +373,21 @@ async def enroll_voice(
         rec.mode = "voice"
         rec.webhook_url = ""
         rec.bound = 0
-        rec.platform = "esp32"
+        rec.platform = platform if platform in ("esp32", "desktop") else "esp32"
         rec.hostname = hostname or rec.hostname or ""
         rec.last_seen = _now()
         rec.updated_at = _now()
         await session.commit()
     logger.info("voice device enrolled device=%s name=%s", device_id, name or device_id)
+    from app.core.chain import append_chain
+
+    await append_chain(
+        kind="enroll",
+        actor_id=device_id,
+        channel=platform if platform in ("esp32", "desktop") else "esp32",
+        status="voice",
+        summary=name or device_id,
+    )
     return {
         "device_id": device_id,
         "device_token": token,
@@ -731,6 +751,18 @@ async def call_peer(
         info.id,
         plan["local"],
     )
+    from app.core.chain import append_chain
+
+    await append_chain(
+        kind="call",
+        task_id=info.id,
+        actor_id=caller.id,
+        target_id=plan["node_id"],
+        intent=kind,
+        status="queued",
+        summary=prompt,
+        detail={"runtime": runtime, "agent_id": agent_id, "local": bool(plan["local"])},
+    )
     return {
         "id": info.id,
         "caller": caller.id,
@@ -997,6 +1029,17 @@ async def claim(token: str) -> dict[str, Any] | None:
         payload["runtime"],
         payload["agent_id"],
     )
+    from app.core.chain import append_chain
+
+    await append_chain(
+        kind="claim",
+        task_id=payload["id"],
+        actor_id=rec.id,
+        target_id=rec.id,
+        status="running",
+        summary=payload["prompt"],
+        detail={"runtime": payload["runtime"], "agent_id": payload["agent_id"]},
+    )
     return payload
 
 
@@ -1061,6 +1104,17 @@ async def finish(
         status,
         duration_ms,
     )
+    from app.core.chain import append_chain
+
+    await append_chain(
+        kind="finish",
+        task_id=task_id,
+        actor_id=rec.id,
+        target_id=rec.id,
+        status=status,
+        summary=output or error,
+        detail={"duration_ms": int(duration_ms or 0)},
+    )
     return result
 
 
@@ -1079,13 +1133,31 @@ async def _mark_running(task_id: str, node_id: str) -> None:
 
 async def notify_connector(node_id: str, task: dict[str, Any]) -> bool:
     """webhook 模式按飞书签名把任务推到设备。失败则保留 queued，插件仍可领取。"""
+    from app.core.chain import append_chain
+
+    task_id = str(task.get("id") or "")
+    summary = str(task.get("prompt") or "")
     rec = await get_node(node_id)
     if rec is None or rec.mode != "webhook" or not (rec.webhook_url or "").strip():
-        logger.info("fleet plugin queued node=%s task=%s", node_id, task.get("id"))
+        logger.info("fleet plugin queued node=%s task=%s", node_id, task_id or "-")
+        await append_chain(
+            kind="webhook",
+            task_id=task_id,
+            target_id=node_id,
+            status="queued",
+            summary=summary,
+        )
         return False
     secret = get_settings().fleet_enroll_token
     if not secret:
         logger.error("fleet webhook skipped, enroll token empty node=%s", node_id)
+        await append_chain(
+            kind="webhook",
+            task_id=task_id,
+            target_id=node_id,
+            status="failed",
+            summary=summary,
+        )
         return False
     body = json.dumps({"type": "task.dispatch", "task": task}, ensure_ascii=False).encode()
     timestamp = str(int(time.time()))
@@ -1099,23 +1171,38 @@ async def notify_connector(node_id: str, task: dict[str, Any]) -> bool:
             resp = await client.post(rec.webhook_url, content=body, headers=headers)
         ok = 200 <= resp.status_code < 300
         if ok:
-            await _mark_running(str(task.get("id") or ""), node_id)
+            await _mark_running(task_id, node_id)
             logger.info(
                 "fleet webhook pushed node=%s task=%s status=%s",
                 node_id,
-                task.get("id"),
+                task_id or "-",
                 resp.status_code,
             )
         else:
             logger.error(
                 "fleet webhook rejected node=%s task=%s status=%s",
                 node_id,
-                task.get("id"),
+                task_id or "-",
                 resp.status_code,
             )
+        await append_chain(
+            kind="webhook",
+            task_id=task_id,
+            target_id=node_id,
+            status="pushed" if ok else "failed",
+            summary=summary,
+            detail={"http_status": resp.status_code},
+        )
         return ok
     except Exception as e:
-        logger.error("fleet webhook failed node=%s task=%s err=%s", node_id, task.get("id"), e)
+        logger.error("fleet webhook failed node=%s task=%s err=%s", node_id, task_id or "-", e)
+        await append_chain(
+            kind="webhook",
+            task_id=task_id,
+            target_id=node_id,
+            status="failed",
+            summary=summary,
+        )
         return False
 
 

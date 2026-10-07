@@ -275,6 +275,17 @@ class TaskManager:
                 runtime,
                 req.agent_id,
             )
+            from app.core.chain import append_chain
+
+            await append_chain(
+                kind="dispatch",
+                task_id=task_id,
+                actor_id="coordinator",
+                target_id=remote_node,
+                status="queued",
+                summary=req.prompt,
+                detail={"runtime": runtime, "agent_id": req.agent_id},
+            )
             try:
                 from app.core.fleet import notify_connector
 
@@ -292,6 +303,17 @@ class TaskManager:
             except Exception as e:
                 logger.warning("fleet notify failed task=%s node=%s: %s", task_id, remote_node, e)
             return info
+        from app.core.chain import append_chain
+
+        await append_chain(
+            kind="dispatch",
+            task_id=task_id,
+            actor_id="coordinator",
+            target_id=stamped_node or "local",
+            status="queued",
+            summary=req.prompt,
+            detail={"runtime": runtime, "agent_id": req.agent_id},
+        )
         asyncio.create_task(self._dispatch(task_id, req))
         return info
 
@@ -429,6 +451,17 @@ class TaskManager:
             task_id,
             runtime,
             final_status,
+        )
+        from app.core.chain import append_chain
+
+        await append_chain(
+            kind="finish",
+            task_id=task_id,
+            actor_id="coordinator",
+            target_id="local",
+            status=final_status,
+            summary=output_text or final_error,
+            detail={"runtime": runtime, "agent_id": req.agent_id, "duration_ms": duration_ms},
         )
 
     def _normalize_event(self, raw: RuntimeEvent) -> TaskEvent:

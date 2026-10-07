@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>AgentCenter · 系统架构图 · Skota M</title>
+<style>
+:root{
+  --bg-page:#f5f6fa;
+  --bg-card:#fff;
+  --ink:#1f2937;
+  --muted:#6b7280;
+  --line:#e5e7eb;
+  --c-arrow:#94a3b8;
+  --r:12px;
+  --shadow:0 1px 3px rgba(0,0,0,.04),0 4px 12px rgba(0,0,0,.05);
+  --c-ui:#3b82f6;
+  --c-api:#06b6d4;
+  --c-svc:#10b981;
+  --c-ai:#f97316;
+  --c-data:#8b5cf6;
+  --c-ext:#64748b;
+  --bg-stack:#0f172a;
+}
+*{box-sizing:border-box}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif;background:var(--bg-page);color:var(--ink);padding:20px 16px;line-height:1.55}
+.wrap{max-width:1180px;margin:0 auto}
+header{margin-bottom:8px}
+h1{font-size:22px;margin:0 0 4px;font-weight:700}
+header p{color:var(--muted);margin:0;font-size:13px;max-width:920px}
+.sec{margin-top:22px}
+.sec-h{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.sec-h h2{margin:0;font-size:16px;font-weight:700}
+.pip{font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:#ede9fe;color:#7c3aed}
+.pip.k{background:#dbeafe;color:#1d4ed8}
+.pip.b{background:#1e293b;color:#38bdf8}
+.sec-desc{color:var(--muted);font-size:12.5px;margin:0 0 10px}
+.en{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.92em}
+.callout{margin-top:10px;padding:8px 12px;background:#eff6ff;border-left:4px solid #3b82f6;border-radius:0 8px 8px 0;font-size:12.5px;color:#1e3a8a}
+.callout b{color:#1e40af}
+.callout code{font-size:11.5px;background:#dbeafe;padding:1px 5px;border-radius:4px}
+
+.layers{display:flex;flex-direction:column;gap:6px}
+.layer{background:var(--bg-card);border-radius:var(--r);box-shadow:var(--shadow);overflow:hidden;border:1px solid var(--line)}
+.layer-head{padding:8px 12px;color:#fff;display:flex;align-items:center;gap:10px}
+.layer-head .ico{width:32px;height:32px;border-radius:8px;background:rgba(255,255,255,.18);display:grid;place-items:center;flex-shrink:0}
+.layer-head .ico svg{width:18px;height:18px;stroke:#fff;fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.layer-head h3{margin:0;font-size:14px;font-weight:700}
+.layer-head .sub{font-size:11px;opacity:.92;margin-top:1px}
+.layer-body{padding:8px 12px;display:grid;gap:8px}
+.layer-body.cols-3{grid-template-columns:repeat(3,1fr)}
+.layer-body.cols-4{grid-template-columns:repeat(4,1fr)}
+.layer-body.cols-2{grid-template-columns:repeat(2,1fr)}
+@media(max-width:900px){
+  .layer-body.cols-3,.layer-body.cols-4,.layer-body.cols-2{grid-template-columns:1fr}
+}
+.zone .zt{font-size:11px;font-weight:700;color:#0f172a;margin-bottom:6px;display:inline-block;padding:2px 8px;border-radius:999px}
+.chips{display:flex;flex-wrap:wrap;gap:4px}
+.chip{padding:2px 7px;border:1px solid var(--line);border-radius:6px;font-size:11.5px;color:#0f172a;background:#fff}
+.chip.bold{font-weight:700}
+.between{text-align:center;color:var(--c-arrow);font-size:12px;padding:0;letter-spacing:.04em}
+
+.l-ui .layer-head{background:var(--c-ui)}
+.l-ui .zt{background:#dbeafe;color:var(--c-ui)}
+.l-ui .chip{background:#eff6ff;border-color:#bfdbfe}
+.l-api .layer-head{background:var(--c-api)}
+.l-api .zt{background:#cffafe;color:#0e7490}
+.l-api .chip{background:#ecfeff;border-color:#a5f3fc}
+.l-svc .layer-head{background:var(--c-svc)}
+.l-svc .zt{background:#d1fae5;color:#047857}
+.l-svc .chip{background:#ecfdf5;border-color:#a7f3d0}
+.l-ai .layer-head{background:var(--c-ai)}
+.l-ai .zt{background:#ffedd5;color:#c2410c}
+.l-ai .chip{background:#fff7ed;border-color:#fed7aa}
+.l-data .layer-head{background:var(--c-data)}
+.l-data .zt{background:#ede9fe;color:#6d28d9}
+.l-data .chip{background:#f5f3ff;border-color:#ddd6fe}
+.l-ext .layer-head{background:var(--c-ext)}
+.l-ext .zt{background:#f1f5f9;color:#475569}
+.l-ext .chip{background:#f8fafc;border-color:#cbd5e1}
+
+.flowbar{margin-top:10px;display:grid;grid-template-columns:1fr;gap:6px}
+.flow{padding:8px 12px;border-radius:8px;font-size:12.5px;line-height:1.45}
+.flow b{display:block;font-size:11px;letter-spacing:.04em;margin-bottom:2px}
+.flow.go{background:#ecfdf5;border:1px solid #a7f3d0;color:#065f46}
+.flow.back{background:#fff7ed;border:1px solid #fed7aa;color:#9a3412}
+
+.stack-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:960px){.stack-grid{grid-template-columns:1fr}}
+.stack-box{background:var(--bg-stack);border-radius:var(--r);padding:12px;color:#f1f5f9}
+.stack-box h3{margin:0 0 4px;font-size:13px;font-weight:700}
+.stack-box .hint{color:#94a3b8;font-size:11.5px;margin:0 0 8px}
+.stack{display:flex;flex-direction:column;gap:4px}
+.sl{background:#1e293b;border-radius:8px;padding:7px 10px;display:flex;align-items:center;gap:8px;border-left:3px solid #38bdf8}
+.sl[data-d="1"]{margin-left:0;background:#334155}
+.sl[data-d="2"]{margin-left:14px;background:#3b4a63}
+.sl[data-d="3"]{margin-left:28px;background:#475569}
+.sl[data-d="4"]{margin-left:42px;background:#546178}
+.sl[data-d="5"]{margin-left:56px;background:#64748b}
+.sl-id{width:22px;height:22px;border-radius:50%;background:rgba(56,189,248,.2);color:#38bdf8;font-weight:700;display:grid;place-items:center;font-size:11px;flex-shrink:0}
+.sl-body b{display:block;font-size:12px;margin-bottom:1px}
+.sl-body span{font-size:11px;color:#cbd5e1}
+.arr{color:#38bdf8;font-size:11px;padding:0 0 0 8px}
+
+.split{display:grid;grid-template-columns:1.35fr .85fr;gap:12px}
+@media(max-width:960px){.split{grid-template-columns:1fr}}
+.card{background:var(--bg-card);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);padding:12px}
+.card h4{margin:0 0 8px;font-size:13px}
+.pkg{margin-bottom:8px}
+.pkg:last-child{margin-bottom:0}
+.pkg .name{font-size:12px;font-weight:700;margin-bottom:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+.pkg .name span{font-size:10.5px;font-weight:600;padding:1px 6px;border-radius:999px;background:#f1f5f9;color:#64748b}
+.pkg ul{margin:0;padding-left:16px;font-size:12px;color:#475569}
+.pkg li{margin:1px 0}
+.rt-row{display:flex;justify-content:space-between;gap:8px;padding:6px 8px;background:#f8fafc;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;font-size:12px}
+.rt-row:last-child{margin-bottom:0}
+.rt-row b{color:#0f172a}
+.rt-row code{font-size:11px;color:#64748b}
+
+footer{margin-top:22px;padding-top:12px;border-top:1px solid var(--line);color:var(--muted);font-size:11.5px;display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px}
+footer a{color:#3b82f6;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>AgentCenter · 系统架构图</h1>
+    <p>云端是协调器。OpenClaw 与 Hermes 仍在本机执行。超级AI 只把一句话收成白名单意图；连接器领取任务；语音终端只对话，不领任务。</p>
+  </header>
+
+  <div class="callout">
+    <b>仓内真源</b>：<code>frontend/</code> 端口 3013 · <code>backend/app/main.py</code> 端口 8013 · <code>fleet-edge/</code> · <code>firmware/esp32/super_ai/</code> · 说明见 <code>guide/architecture.md</code>
+  </div>
+
+  <section class="sec">
+    <div class="sec-h">
+      <span class="pip k">SKOTA · K</span>
+      <h2>分层 · 谁在说话，谁在执行</h2>
+    </div>
+    <p class="sec-desc">自上而下是请求下沉。控制台和 CLI 直接调协调服务；只有超级AI 网页和 ESP32 先过意图白名单。</p>
+
+    <div class="layers">
+      <div class="layer l-ui">
+        <div class="layer-head">
+          <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></div>
+          <div><h3>体验层</h3><div class="sub">Next.js 控制台 · CLI · ESP32 固件</div></div>
+        </div>
+        <div class="layer-body cols-4">
+          <div class="zone">
+            <div class="zt">超级AI</div>
+            <div class="chips">
+              <span class="chip bold">/</span>
+              <span class="chip">文字</span>
+              <span class="chip">按住说话</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">控制台</div>
+            <div class="chips">
+              <span class="chip bold">/cyber/tasks</span>
+              <span class="chip">项目 · Agents · 小队</span>
+              <span class="chip">技能 · Kanban · 多端</span>
+              <span class="chip">系统 · 会话 · 知识库 · 输出物</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">命令行</div>
+            <div class="chips">
+              <span class="chip bold">scripts/ac</span>
+              <span class="chip">health · agents · tasks</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">语音板</div>
+            <div class="chips">
+              <span class="chip bold">firmware/esp32/super_ai</span>
+              <span class="chip">串口一行即发送</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="between">↓ HTTP 8013 · 网页静态资源在 3013 · 任务进度另走 SSE / WebSocket</div>
+
+      <div class="layer l-api">
+        <div class="layer-head">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M4 8h16M4 12h16M4 16h10"/><circle cx="18" cy="16" r="2"/></svg></div>
+          <div><h3>接入层</h3><div class="sub">FastAPI · backend/app/main.py · 缺省 127.0.0.1:8013</div></div>
+        </div>
+        <div class="layer-body cols-4">
+          <div class="zone">
+            <div class="zt">超级AI</div>
+            <div class="chips">
+              <span class="chip bold">/api/super-ai/turn</span>
+              <span class="chip">/device/enroll</span>
+              <span class="chip">/device/turn</span>
+              <span class="chip">/device/tasks/{id}</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">任务与编排</div>
+            <div class="chips">
+              <span class="chip bold">/api/tasks</span>
+              <span class="chip">/api/agents</span>
+              <span class="chip">/api/squads</span>
+              <span class="chip">/api/kanban</span>
+              <span class="chip">/api/autopilots</span>
+              <span class="chip">/ws/tasks/{id}</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">多端</div>
+            <div class="chips">
+              <span class="chip bold">/api/fleet</span>
+              <span class="chip">handshake · enroll</span>
+              <span class="chip">claim · finish · call</span>
+              <span class="chip">X-Node-Token</span>
+              <span class="chip">X-Device-Token</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">记忆与观测</div>
+            <div class="chips">
+              <span class="chip">/api/knowledge</span>
+              <span class="chip">/api/skills</span>
+              <span class="chip">/api/outputs</span>
+              <span class="chip">/api/system-status</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="between">↓ 超级AI 先收成意图；其余接口直接进对应服务</div>
+
+      <div class="layer l-svc">
+        <div class="layer-head">
+          <div class="ico"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17h7"/></svg></div>
+          <div><h3>协调层</h3><div class="sub">backend/app/core · 云端不替设备跑 CLI</div></div>
+        </div>
+        <div class="layer-body cols-3">
+          <div class="zone">
+            <div class="zt">对话与任务</div>
+            <div class="chips">
+              <span class="chip bold">super_ai 意图白名单</span>
+              <span class="chip">device_channel</span>
+              <span class="chip">TaskManager</span>
+              <span class="chip">AgentRegistry</span>
+              <span class="chip">确认后才 create_task</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">名册</div>
+            <div class="chips">
+              <span class="chip bold">fleet</span>
+              <span class="chip">local · plugin</span>
+              <span class="chip">webhook · voice</span>
+              <span class="chip">未绑定不接任务</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">记忆 · 能力 · 观测</div>
+            <div class="chips">
+              <span class="chip">知识库三层</span>
+              <span class="chip">技能目录与自挖掘</span>
+              <span class="chip">输出物只读索引</span>
+              <span class="chip">MonitorHub 双栈</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="between">↓ 本机适配器，或排队等连接器来领</div>
+
+      <div class="layer l-ai">
+        <div class="layer-head">
+          <div class="ico"><svg viewBox="0 0 24 24"><path d="M12 3v4M12 17v4M4.9 6.5l2.8 2.8M16.3 14.7l2.8 2.8M3 12h4M17 12h4M4.9 17.5l2.8-2.8M16.3 9.3l2.8-2.8"/><circle cx="12" cy="12" r="3"/></svg></div>
+          <div><h3>执行层</h3><div class="sub">按 runtime 选择 · AI_MOCK_MODE 时走 Mock，不调用真实 CLI</div></div>
+        </div>
+        <div class="layer-body cols-3">
+          <div class="zone">
+            <div class="zt">协调器本机</div>
+            <div class="chips">
+              <span class="chip bold">OpenClawAdapter</span>
+              <span class="chip">openclaw agent --local --json</span>
+              <span class="chip bold">HermesAdapter</span>
+              <span class="chip">hermes chat -q</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">其他机器</div>
+            <div class="chips">
+              <span class="chip bold">fleet-edge</span>
+              <span class="chip">扫描本机智能体</span>
+              <span class="chip">claim 后本机执行</span>
+              <span class="chip">finish 回写</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">语音终端不做的事</div>
+            <div class="chips">
+              <span class="chip bold">mode=voice</span>
+              <span class="chip">不扫描智能体</span>
+              <span class="chip">不 claim</span>
+              <span class="chip">轮询任务播报</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="between">↓ 落库与只读目录分开</div>
+
+      <div class="layer l-data">
+        <div class="layer-head">
+          <div class="ico"><svg viewBox="0 0 24 24"><ellipse cx="12" cy="6" rx="7" ry="3"/><path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6"/><path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6"/></svg></div>
+          <div><h3>数据层</h3><div class="sub">SQLite · 控制台改过的路径不以 .env 盖回</div></div>
+        </div>
+        <div class="layer-body cols-3">
+          <div class="zone">
+            <div class="zt">库</div>
+            <div class="chips">
+              <span class="chip bold">data/agentcenter.db</span>
+              <span class="chip">任务与事件</span>
+              <span class="chip">设备名册与令牌哈希</span>
+              <span class="chip">知识卡片 · 技能账本</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">本机配置</div>
+            <div class="chips">
+              <span class="chip">data/content_roots.json</span>
+              <span class="chip">data/fleet_link.json</span>
+              <span class="chip">~/.agentcenter/&lt;节点&gt;.token</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">不进库的正文</div>
+            <div class="chips">
+              <span class="chip">SKILL.md 在运行时目录</span>
+              <span class="chip">输出物在 Obsidian 目录</span>
+              <span class="chip">令牌明文不进日志</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="between">↓ 外部系统只按契约接入</div>
+
+      <div class="layer l-ext">
+        <div class="layer-head">
+          <div class="ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.8 3.8 5.8 3.8 9S14.5 18.2 12 21c-2.5-2.8-3.8-5.8-3.8-9S9.5 5.8 12 3z"/></svg></div>
+          <div><h3>外部系统</h3><div class="sub">运行时 CLI、资料目录、告警</div></div>
+        </div>
+        <div class="layer-body cols-4">
+          <div class="zone">
+            <div class="zt">运行时</div>
+            <div class="chips">
+              <span class="chip bold">openclaw</span>
+              <span class="chip bold">hermes</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">知识与技能目录</div>
+            <div class="chips">
+              <span class="chip">WaytoAI/personalwiki</span>
+              <span class="chip">WaytoAI/skills</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">输出物</div>
+            <div class="chips">
+              <span class="chip">Obsidian expe 库</span>
+              <span class="chip">OUTPUTS_VAULT_EXTRA</span>
+            </div>
+          </div>
+          <div class="zone">
+            <div class="zt">告警</div>
+            <div class="chips">
+              <span class="chip">飞书 Webhook</span>
+              <span class="chip">Gateway · Cron · 磁盘</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="flowbar">
+      <div class="flow go"><b>主路径</b>说话或在任务页派单 → FastAPI → 白名单或 TaskManager → 协调器本机 CLI，或排队等 fleet-edge 领取并在那台机器执行。</div>
+      <div class="flow back"><b>回流</b>SSE / WebSocket 把文本和工具事件推回控制台。连接器 finish 回写结果。语音终端每 2 秒轮询任务播报。任务创建前可注入知识卡片；结束后写入复盘，并捕获技能，显式提炼后才进入下次调用。</div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-h">
+      <span class="pip b">SKOTA · B</span>
+      <h2>两条调用栈</h2>
+    </div>
+    <p class="sec-desc">左边是「先确认再执行」。右边是「设备领取再执行」。语音板走左边，不出现在右边的领取步骤里。</p>
+    <div class="stack-grid">
+      <div class="stack-box">
+        <h3>超级AI · 建任务</h3>
+        <p class="hint">网页 POST /api/super-ai/turn，或板子带 X-Device-Token 调 /device/turn。认不出就追问。</p>
+        <div class="stack">
+          <div class="sl" data-d="1"><div class="sl-id">1</div><div class="sl-body"><b>说「帮我做…」</b><span>网页或 ESP32</span></div></div>
+          <div class="arr">↓</div>
+          <div class="sl" data-d="2"><div class="sl-id">2</div><div class="sl-body"><b>parse_turn → create_task</b><span>选出默认智能体，返回 pending，尚未建任务</span></div></div>
+          <div class="arr">↓</div>
+          <div class="sl" data-d="3"><div class="sl-id">3</div><div class="sl-body"><b>回复「确认」</b><span>取消类说法丢掉确认单</span></div></div>
+          <div class="arr">↓</div>
+          <div class="sl" data-d="4"><div class="sl-id">4</div><div class="sl-body"><b>TaskManager.create_task</b><span>状态 queued → running</span></div></div>
+          <div class="arr">↓</div>
+          <div class="sl" data-d="5"><div class="sl-id">5</div><div class="sl-body"><b>本机执行，或等连接器领取</b><span>板子只轮询 GET /device/tasks/{id}，自己不跑 CLI</span></div></div>
+        </div>
+      </div>
+      <div class="stack-box">
+        <h3>多端 · 领取任务</h3>
+        <p class="hint">连接器先上报，控制台确认绑定之后才接单。node_id=auto 只选在线且已绑定的设备。</p>
+        <div class="stack">
+          <div class="sl" data-d="1"><div class="sl-id">1</div><div class="sl-body"><b>fleet-edge 扫描并 enroll</b><span>须扫到 OpenClaw 或 Hermes；令牌只存哈希</span></div></div>
+          <div class="arr">↓</div>
+          <div class="sl" data-d="2"><div class="sl-id">2</div><div class="sl-body"><b>控制台勾选绑定</b><span>或本机「握手并绑定」；地址记在 fleet_link.json</span></div></div>
+          <div class="arr">↓</div>
+          <div class="sl" data-d="3"><div class="sl-id">3</div><div class="sl-body"><b>任务页或 CLI 派给该设备</b><span>POST /api/tasks，可带 node_id</span></div></div>
+          <div class="arr">↓</div>
+          <div class="sl" data-d="4"><div class="sl-id">4</div><div class="sl-body"><b>设备 claim</b><span>X-Node-Token；webhook 模式由云端按签名推送</span></div></div>
+          <div class="arr">↓</div>
+          <div class="sl" data-d="5"><div class="sl-id">5</div><div class="sl-body"><b>本机 CLI 执行后 finish</b><span>结果回到协调器，控制台经 SSE 看见</span></div></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec">
+    <div class="sec-h">
+      <span class="pip">模块</span>
+      <h2>代码落点与运行边界</h2>
+    </div>
+    <div class="split">
+      <div class="card">
+        <h4>协调器里的包</h4>
+        <div class="pkg">
+          <div class="name">对话 <span>core/super_ai.py · core/device_channel.py</span></div>
+          <ul><li>白名单：任务、知识库、技能、输出物、系统、多端、打开页面</li><li>日志键 run_id、intent、service、workspace</li></ul>
+        </div>
+        <div class="pkg">
+          <div class="name">任务 <span>core/task_manager.py · core/agent_registry.py</span></div>
+          <ul><li>串行键 (runtime, agent_id)，默认同进程最多 3 个并发</li><li>查找智能体带 60 秒缓存</li></ul>
+        </div>
+        <div class="pkg">
+          <div class="name">多端 <span>core/fleet.py · fleet-edge/</span></div>
+          <ul><li>能力：openclaw.agent、hermes.chat、task.execute</li><li>POST /api/fleet/call 调用另一台已绑定设备上的智能体</li></ul>
+        </div>
+        <div class="pkg">
+          <div class="name">记忆与观测 <span>knowledge · skills · outputs_vault · monitor_hub</span></div>
+          <ul><li>知识库与技能互相留指针，不复制全文</li><li>输出物与知识库并列，路径逃逸拒绝</li></ul>
+        </div>
+      </div>
+      <div class="card">
+        <h4>进程与端口</h4>
+        <div class="rt-row"><b>控制台</b><code>:3013</code></div>
+        <div class="rt-row"><b>API + 桌面静态页</b><code>:8013</code></div>
+        <div class="rt-row"><b>连接器</b><code>fleet-edge</code></div>
+        <div class="rt-row"><b>生命周期</b><code>start-all / stop / verify</code></div>
+        <div class="rt-row"><b>注册令牌</b><code>FLEET_ENROLL_TOKEN</code></div>
+        <p class="sec-desc" style="margin:10px 0 0">桌面 DMG 把 FastAPI 当作随包进程，关窗即停。外置盘上的开发仓库用登录项加看门狗，不用 launchd 直接托管。</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    <span>2026-10-07 · 系统架构图 · Skota M（K 分层 + B 调用栈）</span>
+    <span>
+      <a class="source" href="./architecture.md">架构说明</a>
+      ·
+      <a class="source" href="file:///Users/expeqiu/Library/Mobile%20Documents/iCloud~md~obsidian/Documents/expe/openclaw/0%E5%9B%A2%E9%98%9F%E9%80%9A%E7%94%A8%E8%A7%84%E5%88%99/3%E5%AE%9E%E8%B7%B5%E5%B1%82/%E6%A8%A1%E7%89%88/%E7%B3%BB%E7%BB%9F%E5%9B%BE/2026-07-27-skota-%E7%B3%BB%E7%BB%9F%E5%9B%BE%E6%A0%B7%E5%BC%8F%E7%B4%A2%E5%BC%95.html">样式索引</a>
+    </span>
+  </footer>
+</div>
+</body>
+</html>
