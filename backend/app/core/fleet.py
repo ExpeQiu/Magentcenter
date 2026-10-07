@@ -18,12 +18,14 @@ import socket
 import time
 from datetime import datetime, timedelta
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 from sqlalchemy import func, select
 
 from app.config import get_settings
 from app.models.db import FleetNodeRecord, TaskEventRecord, TaskRecord, get_session_factory
+from app.paths import data_dir
 
 logger = logging.getLogger(__name__)
 
@@ -40,12 +42,46 @@ class FleetError(Exception):
     pass
 
 
+class FleetLegacyCloud(FleetError):
+    """云端还是旧协调器，没有握手接口，改走注册和设备列表。"""
+
+
 def _now() -> datetime:
     return datetime.utcnow()
 
 
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
+
+
+_RUNTIME_CAPS = {
+    "openclaw": ("openclaw.agent",),
+    "hermes": ("hermes.chat",),
+}
+_HANDSHAKE_TTL = 120
+
+
+def handshake_proof(secret: str, role: str, material: str) -> str:
+    msg = f"fleet.handshake.v1.{role}.{material}".encode()
+    mac = hmac.new(secret.encode(), msg, hashlib.sha256)
+    return mac.hexdigest()
+
+
+def _eq(left: str, right: str) -> bool:
+    if not left or not right or len(left) != len(right):
+        return False
+    return hmac.compare_digest(left, right)
+
+
+def capabilities_of(agents: list[dict[str, str]]) -> list[str]:
+    caps: list[str] = []
+    for agent in agents:
+        for cap in _RUNTIME_CAPS.get(agent.get("runtime") or "", ()):
+            if cap not in caps:
+                caps.append(cap)
+    if agents and "task.execute" not in caps:
+        caps.append("task.execute")
+    return caps
 
 
 def sign_body(secret: str, timestamp: str, body: bytes) -> str:
@@ -159,6 +195,7 @@ def to_info(rec: FleetNodeRecord, counts: dict[str, dict[str, int]] | None = Non
     seen = _load_agents(getattr(rec, "seen_json", "") or "[]")
     runtimes = _runtimes([a["runtime"] for a in (agents or seen)])
     bound = bool(getattr(rec, "bound", 0))
+    shown = agents if bound else seen
     return {
         "id": rec.id,
         "name": rec.name,
@@ -177,6 +214,9 @@ def to_info(rec: FleetNodeRecord, counts: dict[str, dict[str, int]] | None = Non
         "load": rec.load,
         "running_count": int(bucket.get("running", 0)),
         "queued_count": int(bucket.get("queued", 0)),
+        "capabilities": capabilities_of(shown),
+        "handshake": getattr(rec, "handshake_state", "") or "",
+        "handshake_at": getattr(rec, "handshake_at", None),
     }
 
 
@@ -279,6 +319,233 @@ async def enroll(
         hostname or "-",
     )
     return {**info, "node_id": node_id, "node_token": token}
+
+
+async def enroll_voice(
+    *,
+    enroll_token: str,
+    expected_token: str,
+    device_id: str,
+    name: str = "",
+    hostname: str = "",
+) -> dict[str, str]:
+    """语音终端注册。不扫描智能体，也不领任务，只换一张设备令牌。"""
+    if not expected_token:
+        raise FleetAuthError("fleet enroll token is not configured")
+    if not hmac.compare_digest(enroll_token or "", expected_token):
+        logger.warning("voice enroll rejected device=%s", device_id)
+        raise FleetAuthError("invalid enroll token")
+    device_id = (device_id or "").strip().lower()
+    if not NODE_ID_RE.match(device_id):
+        raise FleetError("invalid device id")
+
+    token = secrets.token_urlsafe(32)
+    factory = get_session_factory()
+    async with factory() as session:
+        rec = await session.get(FleetNodeRecord, device_id)
+        if rec is not None and (rec.mode or "plugin") != "voice":
+            raise FleetError("device id already registered")
+        if rec is None:
+            rec = FleetNodeRecord(
+                id=device_id,
+                name=name or device_id,
+                bound=0,
+                agents_json="[]",
+                seen_json="[]",
+            )
+            session.add(rec)
+        rec.name = name or rec.name or device_id
+        rec.token_hash = hash_token(token)
+        rec.runtimes_json = "[]"
+        rec.agents_json = "[]"
+        rec.seen_json = "[]"
+        rec.mode = "voice"
+        rec.webhook_url = ""
+        rec.bound = 0
+        rec.platform = "esp32"
+        rec.hostname = hostname or rec.hostname or ""
+        rec.last_seen = _now()
+        rec.updated_at = _now()
+        await session.commit()
+    logger.info("voice device enrolled device=%s name=%s", device_id, name or device_id)
+    return {
+        "device_id": device_id,
+        "device_token": token,
+        "name": name or device_id,
+    }
+
+
+def _peer_view(info: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": info["id"],
+        "name": info["name"],
+        "hostname": info.get("hostname") or "",
+        "platform": info.get("platform") or "",
+        "mode": info.get("mode") or "plugin",
+        "online": bool(info.get("online")),
+        "runtimes": info.get("runtimes") or [],
+        "agents": info.get("agents") or [],
+        "capabilities": info.get("capabilities") or [],
+    }
+
+
+async def peer_catalog(exclude: str = "", workspace_id: str = "") -> list[dict[str, Any]]:
+    """已绑定到云端的其他端：智能体是资源，运行时映射成能力。"""
+    nodes = await list_nodes(workspace_id)
+    peers = [
+        _peer_view(n)
+        for n in nodes
+        if n.get("bound") and (not exclude or n["id"] != exclude)
+    ]
+    logger.info(
+        "fleet catalog workspace=%s exclude=%s peers=%d",
+        workspace_id or "-",
+        exclude or "-",
+        len(peers),
+    )
+    return peers
+
+
+async def begin_handshake(
+    *,
+    enroll_token: str,
+    expected_token: str,
+    node_id: str,
+    nonce: str,
+    name: str = "",
+    runtimes: list[str] | None = None,
+    agents: list[dict[str, Any]] | None = None,
+    hostname: str = "",
+    platform: str = "",
+    mode: str = "plugin",
+    webhook_url: str = "",
+    local_self: bool = False,
+) -> dict[str, Any]:
+    """云端核对注册令牌，记下本机资源，并回一段只有持有同一令牌的云端才能给出的证明。"""
+    if not expected_token:
+        raise FleetAuthError("fleet enroll token is not configured")
+    if not _eq(enroll_token or "", expected_token):
+        logger.warning("fleet handshake rejected node=%s reason=bad-token", node_id)
+        raise FleetAuthError("invalid enroll token")
+    node_id = (node_id or "").strip().lower()
+    if not NODE_ID_RE.match(node_id):
+        raise FleetError("invalid node id")
+    client_nonce = (nonce or "").strip()
+    if len(client_nonce) < 8 or len(client_nonce) > 128:
+        raise FleetError("invalid handshake nonce")
+    seen = _clean_agents(agents)
+    if not seen:
+        raise FleetError("没有可绑定的智能体")
+    if local_self:
+        mode = "local"
+    else:
+        mode = mode if mode in ("plugin", "webhook") else "plugin"
+    if mode == "webhook" and not (webhook_url or "").strip():
+        raise FleetError("webhook mode requires webhook_url")
+
+    challenge = secrets.token_hex(16)
+    expires = _now() + timedelta(seconds=_HANDSHAKE_TTL)
+    factory = get_session_factory()
+    async with factory() as session:
+        rec = await session.get(FleetNodeRecord, node_id)
+        if rec is None:
+            rec = FleetNodeRecord(id=node_id, name=name or node_id, bound=0, agents_json="[]")
+            session.add(rec)
+        rec.name = name or rec.name or node_id
+        rec.seen_json = _dump_agents(seen)
+        if not rec.bound:
+            rec.runtimes_json = _dump_runtimes([a["runtime"] for a in seen] or (runtimes or []))
+            rec.agents_json = "[]"
+        rec.hostname = hostname or rec.hostname or ""
+        rec.platform = platform or rec.platform or ""
+        if local_self or rec.mode != "local":
+            rec.mode = mode
+            rec.webhook_url = webhook_url.strip() if mode == "webhook" else ""
+        rec.handshake_state = "pending"
+        rec.handshake_challenge = challenge
+        rec.handshake_expires = expires
+        rec.updated_at = _now()
+        await session.commit()
+    proof = handshake_proof(expected_token, "cloud", f"{client_nonce}.{challenge}")
+    logger.info(
+        "fleet handshake offered node=%s mode=%s agents=%d",
+        node_id,
+        mode,
+        len(seen),
+    )
+    return {
+        "node_id": node_id,
+        "challenge": challenge,
+        "cloud_proof": proof,
+        "expires_in": _HANDSHAKE_TTL,
+    }
+
+
+async def complete_handshake(
+    *,
+    enroll_token: str,
+    expected_token: str,
+    node_id: str,
+    proof: str,
+    workspace_id: str = "",
+) -> dict[str, Any]:
+    """本地回证后，云端绑定它上报的资源，并给出其他端的资源与能力。"""
+    if not expected_token:
+        raise FleetAuthError("fleet enroll token is not configured")
+    if not _eq(enroll_token or "", expected_token):
+        logger.warning("fleet handshake rejected node=%s reason=bad-token", node_id)
+        raise FleetAuthError("invalid enroll token")
+    node_id = (node_id or "").strip().lower()
+    if not NODE_ID_RE.match(node_id):
+        raise FleetError("invalid node id")
+
+    token = secrets.token_urlsafe(32)
+    factory = get_session_factory()
+    async with factory() as session:
+        rec = await session.get(FleetNodeRecord, node_id)
+        if rec is None or not (rec.handshake_challenge or ""):
+            logger.warning("fleet handshake rejected node=%s reason=no-challenge", node_id)
+            raise FleetError("handshake has not started")
+        if rec.handshake_expires is None or _now() > rec.handshake_expires:
+            rec.handshake_state = "failed"
+            rec.handshake_challenge = ""
+            rec.updated_at = _now()
+            await session.commit()
+            logger.warning("fleet handshake rejected node=%s reason=expired", node_id)
+            raise FleetError("handshake expired")
+        expected = handshake_proof(expected_token, "client", rec.handshake_challenge)
+        if not _eq(proof or "", expected):
+            logger.warning("fleet handshake rejected node=%s reason=bad-proof", node_id)
+            raise FleetAuthError("invalid handshake proof")
+        seen = _load_agents(rec.seen_json)
+        if not seen:
+            raise FleetError("没有可绑定的智能体")
+        rec.token_hash = hash_token(token)
+        rec.bound = 1
+        rec.agents_json = _dump_agents(seen)
+        rec.runtimes_json = _dump_runtimes([a["runtime"] for a in seen])
+        if workspace_id:
+            rec.workspace_id = workspace_id
+        rec.handshake_state = "ok"
+        rec.handshake_at = _now()
+        rec.handshake_challenge = ""
+        rec.handshake_expires = None
+        rec.last_seen = _now()
+        rec.updated_at = _now()
+        await session.commit()
+        await session.refresh(rec)
+        info = to_info(rec)
+        owner = info.get("workspace_id") or ""
+    peers = await peer_catalog(exclude=node_id, workspace_id=owner)
+    logger.info(
+        "fleet handshake bound node=%s mode=%s agents=%d peers=%d workspace=%s",
+        node_id,
+        info["mode"],
+        len(info["agents"]),
+        len(peers),
+        owner or "-",
+    )
+    return {**info, "node_id": node_id, "node_token": token, "peers": peers}
 
 
 async def authenticate(token: str) -> FleetNodeRecord | None:
@@ -394,6 +661,137 @@ async def plan_dispatch(
 async def resolve_dispatch_node(target: str, runtime: str, agent_id: str = "") -> str:
     plan = await plan_dispatch(target, runtime, agent_id or "default")
     return plan["node_id"]
+
+
+def _agent_kind(agents: list[dict[str, str]], agent_id: str) -> str:
+    """绑定列表里的第一个是主智能体，其余是子智能体。"""
+    if agents and agents[0].get("id") != agent_id:
+        return "subagent"
+    return "agent"
+
+
+async def _bound_caller(caller_id: str) -> FleetNodeRecord:
+    caller_id = (caller_id or "").strip().lower()
+    caller = await get_node(caller_id)
+    if caller is None or not caller.bound:
+        raise FleetError("这台终端还没有绑定，不能调用其他端")
+    if (caller.mode or "") == "voice":
+        raise FleetError("语音终端不直接调用其他端的智能体")
+    return caller
+
+
+async def call_peer(
+    *,
+    caller_id: str,
+    target: str,
+    runtime: str,
+    agent_id: str,
+    prompt: str,
+    task_manager: Any,
+    workspace_id: str = "",
+) -> dict[str, Any]:
+    """已绑定的任意端（含云端本机）让另一端上的智能体或子智能体执行任务。"""
+    caller = await _bound_caller(caller_id)
+    target_id = (target or "").strip().lower()
+    prompt = (prompt or "").strip()
+    runtime = (runtime or "").strip()
+    if runtime not in ("openclaw", "hermes"):
+        raise FleetError("runtime must be openclaw or hermes")
+    if not prompt:
+        raise FleetError("需要任务内容")
+    if not target_id or target_id == caller.id:
+        raise FleetError("只能调用其他端上的智能体")
+    owner = (caller.workspace_id or "").strip()
+    if workspace_id and owner and workspace_id != owner:
+        raise FleetError("终端不属于当前团队")
+    if not owner:
+        owner = (workspace_id or "").strip()
+    plan = await plan_dispatch(target_id, runtime, agent_id, workspace_id=owner)
+    from app.models.schemas import CreateTaskRequest
+
+    info = await task_manager.create_task(
+        CreateTaskRequest(
+            agent_id=agent_id,
+            prompt=prompt,
+            runtime=runtime,  # type: ignore[arg-type]
+            workspace_id=owner,
+            node_id=plan["node_id"],
+        )
+    )
+    target_rec = await get_node(plan["node_id"])
+    agents = _load_agents(target_rec.agents_json) if target_rec is not None else []
+    kind = _agent_kind(agents, agent_id)
+    logger.info(
+        "fleet call caller=%s target=%s kind=%s runtime=%s agent=%s task=%s local=%s",
+        caller.id,
+        plan["node_id"],
+        kind,
+        runtime,
+        agent_id,
+        info.id,
+        plan["local"],
+    )
+    return {
+        "id": info.id,
+        "caller": caller.id,
+        "node_id": plan["node_id"],
+        "local": bool(plan["local"]),
+        "runtime": runtime,
+        "agent_id": agent_id,
+        "kind": kind,
+        "status": info.status,
+    }
+
+
+async def call_peer_from_token(
+    token: str,
+    *,
+    target: str,
+    runtime: str,
+    agent_id: str,
+    prompt: str,
+    task_manager: Any,
+    workspace_id: str = "",
+) -> dict[str, Any]:
+    rec = await authenticate(token)
+    if rec is None:
+        raise FleetAuthError("invalid node token")
+    return await call_peer(
+        caller_id=rec.id,
+        target=target,
+        runtime=runtime,
+        agent_id=agent_id,
+        prompt=prompt,
+        task_manager=task_manager,
+        workspace_id=workspace_id,
+    )
+
+
+async def call_peer_as_cloud(
+    *,
+    target: str,
+    runtime: str,
+    agent_id: str,
+    prompt: str,
+    task_manager: Any,
+    workspace_id: str = "",
+) -> dict[str, Any]:
+    """云端协调器自己作为调用方，使用已绑定的本机节点。"""
+    nodes = await list_nodes(workspace_id)
+    local = [n for n in nodes if n.get("bound") and n.get("mode") == "local"]
+    if not local:
+        raise FleetError("云端还没有绑定本机智能体")
+    if len(local) > 1:
+        raise FleetError("云端本机节点不唯一")
+    return await call_peer(
+        caller_id=local[0]["id"],
+        target=target,
+        runtime=runtime,
+        agent_id=agent_id,
+        prompt=prompt,
+        task_manager=task_manager,
+        workspace_id=workspace_id or local[0].get("workspace_id") or "",
+    )
 
 
 async def _pick_online_agent(runtime: str, agent_id: str, workspace_id: str = "") -> str:
@@ -719,3 +1117,431 @@ async def notify_connector(node_id: str, task: dict[str, Any]) -> bool:
     except Exception as e:
         logger.error("fleet webhook failed node=%s task=%s err=%s", node_id, task.get("id"), e)
         return False
+
+
+def link_path():
+    return data_dir() / "fleet_link.json"
+
+
+def link_token_path():
+    return data_dir() / "fleet_link.token"
+
+
+def normalize_cloud_url(url: str) -> str:
+    text = (url or "").strip().rstrip("/")
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if parsed.username or parsed.password:
+        raise FleetError("云端地址不要带账号密码")
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        raise FleetError("云端地址需要是 http 或 https")
+    return text
+
+
+def is_self_cloud(url: str) -> bool:
+    if not (url or "").strip():
+        return True
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        return False
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    return port == int(get_settings().port)
+
+
+def displayed_cloud_url(env_value: str) -> str:
+    """已有链接文件时以文件为准，空字符串也不回落到环境变量。"""
+    path = link_path()
+    if path.is_file():
+        saved = _read_link_file()
+        return str(saved.get("cloud_url") or "")
+    return (env_value or "").strip()
+
+
+def _read_link_file() -> dict[str, Any]:
+    path = link_path()
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning("fleet link unreadable path=%s err=%s", path, exc)
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _save_link(data: dict[str, Any]) -> None:
+    path = link_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    public = {k: v for k, v in data.items() if k != "node_token"}
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(public, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(path)
+    logger.info(
+        "fleet link saved state=%s node=%s peers=%d",
+        public.get("state") or "-",
+        public.get("node_id") or "-",
+        len(public.get("peers") or []),
+    )
+
+
+def _write_link_token(token: str) -> None:
+    path = link_token_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(token, encoding="utf-8")
+    try:
+        path.chmod(0o600)
+    except OSError:
+        logger.warning("fleet link token chmod failed path=%s", path)
+
+
+def _empty_link(cloud_url: str, *, enroll_configured: bool) -> dict[str, Any]:
+    return {
+        "cloud_url": cloud_url,
+        "state": "",
+        "detail": "",
+        "at": "",
+        "node_id": "",
+        "bound": False,
+        "local_cloud": is_self_cloud(cloud_url),
+        "agents": [],
+        "capabilities": [],
+        "peers": [],
+        "enroll_configured": enroll_configured,
+    }
+
+
+def _link_view(saved: dict[str, Any], *, enroll_configured: bool) -> dict[str, Any]:
+    cloud_url = str(saved.get("cloud_url") or "")
+    return {
+        "cloud_url": cloud_url,
+        "state": str(saved.get("state") or ""),
+        "detail": str(saved.get("detail") or ""),
+        "at": str(saved.get("at") or ""),
+        "node_id": str(saved.get("node_id") or ""),
+        "bound": bool(saved.get("bound")),
+        "local_cloud": is_self_cloud(cloud_url),
+        "agents": saved.get("agents") if isinstance(saved.get("agents"), list) else [],
+        "capabilities": saved.get("capabilities") if isinstance(saved.get("capabilities"), list) else [],
+        "peers": saved.get("peers") if isinstance(saved.get("peers"), list) else [],
+        "enroll_configured": enroll_configured,
+    }
+
+
+async def link_status(workspace_id: str = "", env_cloud_url: str = "") -> dict[str, Any]:
+    enroll_configured = bool(get_settings().fleet_enroll_token)
+    if not link_path().is_file():
+        return _empty_link(displayed_cloud_url(env_cloud_url), enroll_configured=enroll_configured)
+    saved = _read_link_file()
+    view = _link_view(saved, enroll_configured=enroll_configured)
+    if view["state"] != "ok" or not view["node_id"]:
+        return view
+    if view["local_cloud"]:
+        view["peers"] = await peer_catalog(exclude=view["node_id"], workspace_id=workspace_id)
+        return view
+    refreshed = await _pull_remote_peers(view["cloud_url"], exclude=view["node_id"])
+    if refreshed is not None:
+        view["peers"] = refreshed
+        saved["peers"] = refreshed
+        _save_link(saved)
+    return view
+
+
+async def _pull_remote_peers(cloud_url: str, exclude: str = "") -> list[dict[str, Any]] | None:
+    path = link_token_path()
+    token = path.read_text(encoding="utf-8").strip() if path.is_file() else ""
+    if token:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.get(
+                    cloud_url.rstrip("/") + "/api/fleet/catalog",
+                    headers={"X-Node-Token": token},
+                )
+        except Exception as exc:
+            logger.warning("fleet catalog refresh failed cloud=%s err=%s", cloud_url, exc)
+            resp = None
+        if resp is not None and resp.status_code == 200:
+            try:
+                data = resp.json()
+            except json.JSONDecodeError:
+                data = None
+            peers = data.get("peers") if isinstance(data, dict) else None
+            if isinstance(peers, list):
+                logger.info("fleet catalog refreshed cloud=%s peers=%d", cloud_url, len(peers))
+                return peers
+    try:
+        listed = await _get_cloud(cloud_url, "/api/fleet/nodes")
+    except FleetError as exc:
+        logger.warning("fleet nodes refresh failed cloud=%s err=%s", cloud_url, exc)
+        return None
+    if not isinstance(listed, list):
+        return None
+    peers = peers_from_nodes(listed, exclude=exclude)
+    logger.info("fleet nodes refreshed cloud=%s peers=%d", cloud_url, len(peers))
+    return peers
+
+
+def peers_from_nodes(nodes: list[Any], exclude: str = "") -> list[dict[str, Any]]:
+    """把云端设备列表收成其他端的资源与能力。旧协调器没有 capabilities 字段。"""
+    peers: list[dict[str, Any]] = []
+    for item in nodes:
+        if not isinstance(item, dict) or not item.get("bound"):
+            continue
+        node_id = str(item.get("id") or "")
+        if exclude and node_id == exclude:
+            continue
+        agents = _clean_agents(item.get("agents"))
+        peers.append(
+            {
+                "id": node_id,
+                "name": str(item.get("name") or node_id),
+                "hostname": str(item.get("hostname") or ""),
+                "platform": str(item.get("platform") or ""),
+                "mode": str(item.get("mode") or "plugin"),
+                "online": bool(item.get("online")),
+                "runtimes": item.get("runtimes") if isinstance(item.get("runtimes"), list) else [],
+                "agents": agents,
+                "capabilities": item.get("capabilities")
+                if isinstance(item.get("capabilities"), list) and item.get("capabilities")
+                else capabilities_of(agents),
+            }
+        )
+    return peers
+
+
+async def _request_cloud(
+    method: str,
+    cloud_url: str,
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    legacy_on_404: bool = False,
+) -> Any:
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.request(method, cloud_url.rstrip("/") + path, json=payload)
+    except Exception as exc:
+        logger.error("fleet link %s failed path=%s err=%s", method, path, exc)
+        raise FleetError(f"连不上云端：{exc}") from exc
+    if legacy_on_404 and resp.status_code in (404, 405):
+        logger.info("fleet link legacy path missing path=%s status=%s", path, resp.status_code)
+        raise FleetLegacyCloud(path)
+    if resp.status_code == 401:
+        detail = _http_detail(resp) or "云端拒绝了注册令牌"
+        raise FleetAuthError(detail)
+    if resp.status_code >= 400:
+        raise FleetError(_http_detail(resp) or f"云端返回 {resp.status_code}")
+    if resp.status_code == 204 or not resp.content:
+        return {}
+    try:
+        data = resp.json()
+    except json.JSONDecodeError as exc:
+        raise FleetError("云端返回的不是 JSON") from exc
+    if not isinstance(data, (dict, list)):
+        raise FleetError("云端返回的不是 JSON")
+    return data
+
+
+async def _post_cloud(
+    cloud_url: str,
+    path: str,
+    payload: dict[str, Any],
+    *,
+    legacy_on_404: bool = False,
+) -> dict[str, Any]:
+    data = await _request_cloud(
+        "POST", cloud_url, path, payload, legacy_on_404=legacy_on_404
+    )
+    if not isinstance(data, dict):
+        raise FleetError("云端返回的不是 JSON")
+    return data
+
+
+async def _get_cloud(cloud_url: str, path: str) -> Any:
+    return await _request_cloud("GET", cloud_url, path)
+
+
+async def _link_legacy_cloud(
+    url: str,
+    secret: str,
+    identity: dict[str, Any],
+    workspace_id: str,
+) -> dict[str, Any]:
+    """旧云端只有注册和设备列表。注册后立刻绑定，再取回其他端。"""
+    enrolled = await _post_cloud(
+        url,
+        "/api/fleet/enroll",
+        {
+            "enroll_token": secret,
+            "node_id": identity["node_id"],
+            "name": identity["name"],
+            "hostname": identity["hostname"],
+            "platform": identity["platform"],
+            "agents": identity["agents"],
+            "mode": "plugin",
+        },
+    )
+    remote_token = str(enrolled.get("node_token") or "")
+    if remote_token:
+        _write_link_token(remote_token)
+    bound = await _post_cloud(
+        url,
+        "/api/fleet/bind",
+        {
+            "node_id": identity["node_id"],
+            "name": identity["name"],
+            "workspace_id": workspace_id,
+            "agents": identity["agents"],
+        },
+    )
+    listed = await _get_cloud(url, "/api/fleet/nodes")
+    nodes = listed if isinstance(listed, list) else []
+    node_id = str(bound.get("id") or enrolled.get("node_id") or identity["node_id"])
+    agents = bound.get("agents") if isinstance(bound.get("agents"), list) else identity["agents"]
+    peers = peers_from_nodes(nodes, exclude=node_id)
+    logger.info(
+        "fleet link legacy bound cloud=%s node=%s agents=%d peers=%d",
+        url,
+        node_id,
+        len(agents),
+        len(peers),
+    )
+    return {
+        "node_id": node_id,
+        "id": node_id,
+        "agents": agents,
+        "capabilities": capabilities_of(_clean_agents(agents)),
+        "peers": peers,
+    }
+
+
+def _http_detail(resp: httpx.Response) -> str:
+    try:
+        data = resp.json()
+    except json.JSONDecodeError:
+        return (resp.text or "")[:200]
+    detail = data.get("detail") if isinstance(data, dict) else ""
+    return str(detail or "")[:200]
+
+
+async def open_link(
+    *,
+    cloud_url: str,
+    workspace_id: str,
+    registry: Any,
+    enroll_token: str,
+) -> dict[str, Any]:
+    """把本机扫到的智能体绑定到云端，并取回其他端的资源与能力。"""
+    started = time.perf_counter()
+    url = normalize_cloud_url(cloud_url)
+    previous = _read_link_file() if link_path().is_file() else {}
+    same_cloud = str(previous.get("cloud_url") or "") == url
+    local = is_self_cloud(url)
+    secret = enroll_token
+    if not secret:
+        if not local:
+            raise FleetAuthError("fleet enroll token is not configured")
+        secret = secrets.token_urlsafe(32)
+        logger.info("fleet link self handshake without enroll token")
+    scan = await scan_host(registry)
+    if not scan["agents"]:
+        raise FleetError("本机没有可绑定的智能体")
+    nonce = secrets.token_hex(16)
+    identity = {
+        "node_id": scan["node_id"],
+        "name": scan["name"],
+        "hostname": scan["hostname"],
+        "platform": scan["platform"],
+        "agents": scan["agents"],
+        "nonce": nonce,
+    }
+    try:
+        if local:
+            offered = await begin_handshake(
+                enroll_token=secret,
+                expected_token=secret,
+                local_self=True,
+                **identity,
+            )
+            material = f"{nonce}.{offered['challenge']}"
+            if not _eq(offered.get("cloud_proof") or "", handshake_proof(secret, "cloud", material)):
+                raise FleetError("云端握手证明不一致")
+            accepted = await complete_handshake(
+                enroll_token=secret,
+                expected_token=secret,
+                node_id=scan["node_id"],
+                proof=handshake_proof(secret, "client", offered["challenge"]),
+                workspace_id=workspace_id,
+            )
+        else:
+            try:
+                offered = await _post_cloud(
+                    url,
+                    "/api/fleet/handshake",
+                    {**identity, "enroll_token": secret, "mode": "plugin"},
+                    legacy_on_404=True,
+                )
+            except FleetLegacyCloud:
+                accepted = await _link_legacy_cloud(url, secret, identity, workspace_id)
+            else:
+                challenge = str(offered.get("challenge") or "")
+                material = f"{nonce}.{challenge}"
+                if not _eq(str(offered.get("cloud_proof") or ""), handshake_proof(secret, "cloud", material)):
+                    logger.warning("fleet link rejected cloud=%s reason=bad-cloud-proof", url)
+                    raise FleetError("云端握手证明不一致")
+                accepted = await _post_cloud(
+                    url,
+                    "/api/fleet/handshake/accept",
+                    {
+                        "enroll_token": secret,
+                        "node_id": scan["node_id"],
+                        "proof": handshake_proof(secret, "client", challenge),
+                        "workspace_id": workspace_id,
+                    },
+                )
+                remote_token = str(accepted.get("node_token") or "")
+                if remote_token:
+                    _write_link_token(remote_token)
+        view = _link_view(
+            {
+                "cloud_url": url,
+                "state": "ok",
+                "detail": "",
+                "at": datetime.utcnow().isoformat(timespec="seconds") + "Z",
+                "node_id": accepted.get("node_id") or accepted.get("id") or scan["node_id"],
+                "bound": True,
+                "agents": accepted.get("agents") or [],
+                "capabilities": accepted.get("capabilities") or capabilities_of(accepted.get("agents") or []),
+                "peers": accepted.get("peers") or [],
+            },
+            enroll_configured=bool(enroll_token),
+        )
+    except (FleetError, FleetAuthError) as exc:
+        failed = _link_view(
+            {
+                "cloud_url": url,
+                "state": "failed",
+                "detail": str(exc),
+                "at": str(previous.get("at") or ""),
+                "node_id": str(previous.get("node_id") or "") if same_cloud else "",
+                "bound": bool(previous.get("bound")) if same_cloud else False,
+                "agents": previous.get("agents") if same_cloud else [],
+                "capabilities": previous.get("capabilities") if same_cloud else [],
+                "peers": previous.get("peers") if same_cloud else [],
+            },
+            enroll_configured=bool(enroll_token),
+        )
+        _save_link(failed)
+        logger.warning("fleet link failed cloud=%s err=%s", url or "self", exc)
+        raise
+    _save_link(view)
+    logger.info(
+        "fleet link opened cloud=%s node=%s agents=%d peers=%d elapsed_ms=%.0f",
+        url or "self",
+        view["node_id"],
+        len(view["agents"]),
+        len(view["peers"]),
+        (time.perf_counter() - started) * 1000,
+    )
+    return view

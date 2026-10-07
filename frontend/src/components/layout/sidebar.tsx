@@ -19,6 +19,7 @@ export function Sidebar({ healthLabel }: SidebarProps) {
   const [open, setOpen] = useState(false);
 
   const NAV = [
+    { href: "/", label: "超级AI", icon: "✦" },
     { href: wp.tasks(), label: "任务", icon: "📋" },
     { href: wp.projects(), label: "项目", icon: "📁" },
     { href: wp.agents(), label: "Agents", icon: "🤖" },
@@ -80,7 +81,9 @@ export function Sidebar({ healthLabel }: SidebarProps) {
       <nav className="flex-1 space-y-0.5 p-3">
         {NAV.map((item) => {
           const active =
-            pathname === item.href || pathname.startsWith(item.href + "/");
+            item.href === "/"
+              ? pathname === "/"
+              : pathname === item.href || pathname.startsWith(item.href + "/");
           return (
             <Link
               key={item.href}

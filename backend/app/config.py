@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     # 多端连接器。设备用此令牌注册；webhook 推送也用它签名。留空则拒绝注册。
     fleet_enroll_token: str = ""
     fleet_heartbeat_ttl: int = 45
+    # 只在控制台还没保存过云端地址时作为默认值。已保存的地址以 data/fleet_link.json 为准。
+    fleet_cloud_url: str = ""
 
     def enabled_runtimes(self) -> list[str]:
         return parse_enabled_runtimes(self.runtimes)

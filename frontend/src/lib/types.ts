@@ -82,6 +82,35 @@ export interface FleetNode {
   load: number | null;
   running_count: number;
   queued_count: number;
+  capabilities?: string[];
+  handshake?: "" | "pending" | "ok" | "failed" | string;
+  handshake_at?: string | null;
+}
+
+export interface FleetPeer {
+  id: string;
+  name: string;
+  hostname: string;
+  platform: string;
+  mode: string;
+  online: boolean;
+  runtimes: string[];
+  agents: FleetAgent[];
+  capabilities: string[];
+}
+
+export interface FleetLink {
+  cloud_url: string;
+  state: "" | "ok" | "failed" | string;
+  detail: string;
+  at: string;
+  node_id: string;
+  bound: boolean;
+  local_cloud: boolean;
+  agents: FleetAgent[];
+  capabilities: string[];
+  peers: FleetPeer[];
+  enroll_configured: boolean;
 }
 
 export interface TaskListResponse {

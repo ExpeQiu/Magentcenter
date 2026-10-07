@@ -1,11 +1,21 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { PageHeader } from "@/components/layout/page-header";
 import { api } from "@/lib/api";
 import { useWorkspace } from "@/lib/context/workspace-context";
 import { normalizeNode, useTerminal } from "@/lib/context/terminal-context";
-import type { FleetNode, FleetScan } from "@/lib/types";
+import type { FleetLink, FleetNode, FleetScan } from "@/lib/types";
+
+const CAP_LABEL: Record<string, string> = {
+  "openclaw.agent": "OpenClaw",
+  "hermes.chat": "Hermes",
+  "task.execute": "可执行任务",
+};
+
+function capLabel(cap: string) {
+  return CAP_LABEL[cap] || cap;
+}
 
 function agentKey(agent: { runtime: string; id: string }) {
   return `${agent.runtime}:${agent.id}`;
@@ -27,6 +37,11 @@ export function FleetPage() {
   const [deviceName, setDeviceName] = useState("");
   const [picked, setPicked] = useState<Record<string, string[]>>({});
   const [msg, setMsg] = useState("");
+  const [link, setLink] = useState<FleetLink | null>(null);
+  const [cloudUrl, setCloudUrl] = useState("");
+  const [linking, setLinking] = useState(false);
+  const [linkError, setLinkError] = useState("");
+  const cloudTouched = useRef(false);
 
   useEffect(() => {
     setPicked((prev) => {
@@ -40,6 +55,64 @@ export function FleetPage() {
       return next;
     });
   }, [nodes]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const pull = () => {
+      api
+        .fleetLink(workspaceId)
+        .then((data) => {
+          if (cancelled) return;
+          setLink(data);
+          if (!cloudTouched.current) setCloudUrl(data.cloud_url || "");
+          console.info(
+            "fleet link state=%s node=%s peers=%d",
+            data.state || "-",
+            data.node_id || "-",
+            data.peers.length
+          );
+        })
+        .catch((err) => {
+          console.error(err);
+          if (!cancelled) setLinkError(err instanceof Error ? err.message : "读不到云端链接");
+        });
+    };
+    pull();
+    const timer = window.setInterval(pull, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [workspaceId]);
+
+  const openLink = async () => {
+    setLinking(true);
+    setLinkError("");
+    setMsg("");
+    try {
+      const saved = await api.fleetOpenLink({
+        cloud_url: cloudUrl.trim(),
+        workspace_id: workspaceId,
+      });
+      setLink(saved);
+      setCloudUrl(saved.cloud_url || "");
+      setMsg(
+        `已绑定本机 ${saved.agents.length} 个智能体，云端还有 ${saved.peers.length} 个其他端`
+      );
+      console.info(
+        "fleet handshake ok node=%s agents=%d peers=%d",
+        saved.node_id,
+        saved.agents.length,
+        saved.peers.length
+      );
+      refresh();
+    } catch (err) {
+      console.error(err);
+      setLinkError(err instanceof Error ? err.message : "握手失败");
+    } finally {
+      setLinking(false);
+    }
+  };
 
   const runScan = async () => {
     setScanning(true);
@@ -134,12 +207,117 @@ export function FleetPage() {
     <div>
       <PageHeader
         title="多端"
-        description={`${workspace?.name || "当前团队"} · ${selected?.name || "未选择终端"}。左上角按设备名切换。给智能体分配任务请到「任务」。`}
+        description={`${workspace?.name || "当前团队"} · ${selected?.name || "未选择终端"}。把本机资源绑定到云端后，可以看见其他端的智能体和能力。分配任务仍在「任务」。`}
       />
       {error && <p className="mb-4 text-sm text-rose-300">{error}</p>}
       {msg && <p className="mb-4 text-sm text-slate-300">{msg}</p>}
 
       <section className="rounded-xl border border-slate-800 bg-slate-900/40 p-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-medium">绑定到云端</p>
+            <p className="mt-1 text-xs text-slate-500">
+              握手后把本机扫到的智能体交给云端，并取回其他端已经绑定的资源与能力。地址留空表示这台协调器。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={openLink}
+            disabled={linking}
+            className="rounded-lg bg-sky-500 px-3 py-1.5 text-sm font-medium text-slate-950 disabled:opacity-50"
+          >
+            {linking ? "握手中" : "握手并绑定"}
+          </button>
+        </div>
+        <label className="mt-3 block text-xs text-slate-400">
+          云端地址
+          <input
+            value={cloudUrl}
+            onChange={(e) => {
+              cloudTouched.current = true;
+              setCloudUrl(e.target.value);
+            }}
+            placeholder="http://云端:8013"
+            className="mt-1 block w-full max-w-md rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-sm text-slate-100"
+          />
+        </label>
+        {link && !link.enroll_configured && (
+          <p className="mt-3 text-xs text-slate-500">
+            未配置注册令牌时，只能绑定到本机协调器。连接其他云端或让其他机器接入，需要先设置注册令牌。
+          </p>
+        )}
+        {linkError && <p className="mt-3 text-sm text-rose-300">{linkError}</p>}
+        {link?.state === "failed" && link.detail && (
+          <p className="mt-3 text-sm text-rose-300">{link.detail}</p>
+        )}
+        {link?.state === "ok" && (
+          <div className="mt-4 space-y-3">
+            <p className="text-xs text-slate-400">
+              本机已绑定 {link.agents.length} 个智能体
+              {link.capabilities.length
+                ? ` · ${link.capabilities.map(capLabel).join(" · ")}`
+                : ""}
+              {link.local_cloud ? " · 本机协调器" : ` · ${link.cloud_url}`}
+            </p>
+            <div>
+              <p className="text-sm font-medium">其他端</p>
+              {link.peers.length === 0 ? (
+                <p className="mt-2 text-sm text-slate-500">云端还没有其他端的资源。</p>
+              ) : (
+                <div className="mt-2 grid gap-3 lg:grid-cols-2">
+                  {link.peers.map((peer) => (
+                    <article
+                      key={peer.id}
+                      className="rounded-2xl border border-slate-800 bg-slate-950/40 p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-100">{peer.name}</p>
+                          <p className="mt-1 text-xs text-slate-500">
+                            {peer.hostname || peer.id}
+                          </p>
+                        </div>
+                        <p className={peer.online ? "text-xs text-emerald-300" : "text-xs text-slate-500"}>
+                          {peer.online ? "在线" : "离线"}
+                        </p>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {(peer.capabilities.length ? peer.capabilities : peer.runtimes).map((cap) => (
+                          <span
+                            key={cap}
+                            className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-300"
+                          >
+                            {capLabel(cap)}
+                          </span>
+                        ))}
+                      </div>
+                      {peer.agents.length === 0 ? (
+                        <p className="mt-2 text-sm text-slate-500">没有绑定智能体。</p>
+                      ) : (
+                        <ul className="mt-2 space-y-1">
+                          {peer.agents.map((agent) => (
+                            <li key={agentKey(agent)} className="text-sm text-slate-300">
+                              {agent.name}
+                              <span className="ml-2 text-xs text-slate-500">{agent.runtime}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </article>
+                  ))}
+                </div>
+              )}
+              <p className="mt-2 text-xs text-slate-500">
+                {link.local_cloud
+                  ? "这些终端已在本协调器上，左上角切换后可以在「任务」里分配。"
+                  : "这些资源在云端。要分配任务，请到云端控制台。"}
+              </p>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="mt-6 rounded-xl border border-slate-800 bg-slate-900/40 p-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <p className="text-sm font-medium">本机扫描</p>
@@ -243,6 +421,7 @@ export function FleetPage() {
                       </p>
                       <p className={node.bound ? "text-sky-300" : "text-amber-200"}>
                         {node.bound ? "已绑定" : "待绑定"}
+                        {node.handshake === "ok" ? " · 已握手" : ""}
                       </p>
                     </div>
                   </div>

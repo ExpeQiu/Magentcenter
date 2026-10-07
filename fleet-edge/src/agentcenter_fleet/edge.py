@@ -22,6 +22,7 @@ import logging
 import os
 import platform
 import re
+import secrets
 import shutil
 import socket
 import subprocess
@@ -38,6 +39,12 @@ logger = logging.getLogger("fleet-edge")
 
 def _env(name: str, default: str = "") -> str:
     return os.environ.get(name, default).strip()
+
+
+def handshake_proof(secret: str, role: str, material: str) -> str:
+    msg = f"fleet.handshake.v1.{role}.{material}".encode()
+    mac = hmac.new(secret.encode(), msg, hashlib.sha256)
+    return mac.hexdigest()
 
 
 def sign_body(secret: str, timestamp: str, body: bytes) -> str:
@@ -73,8 +80,64 @@ class Cloud:
         logger.info("enrolled node=%s mode=%s", result.get("node_id"), result.get("mode"))
         return result
 
+    def handshake(self, body: dict) -> dict:
+        """把本机资源绑定到云端，并取回其他端的资源与能力。"""
+        nonce = secrets.token_hex(16)
+        offered = self._request(
+            "POST",
+            "/api/fleet/handshake",
+            {**body, "enroll_token": self.enroll_token, "nonce": nonce},
+        )
+        challenge = str(offered.get("challenge") or "")
+        expected = handshake_proof(self.enroll_token, "cloud", f"{nonce}.{challenge}")
+        proof = str(offered.get("cloud_proof") or "")
+        if len(expected) != len(proof) or not hmac.compare_digest(expected, proof):
+            logger.error("cloud handshake proof mismatch node=%s", body.get("node_id"))
+            raise RuntimeError("cloud handshake proof mismatch")
+        accepted = self._request(
+            "POST",
+            "/api/fleet/handshake/accept",
+            {
+                "enroll_token": self.enroll_token,
+                "node_id": body.get("node_id") or "",
+                "proof": handshake_proof(self.enroll_token, "client", challenge),
+            },
+        )
+        self.node_token = accepted.get("node_token") or ""
+        peers = accepted.get("peers") or []
+        logger.info(
+            "handshake bound node=%s agents=%d peers=%d",
+            accepted.get("node_id"),
+            len(accepted.get("agents") or []),
+            len(peers) if isinstance(peers, list) else 0,
+        )
+        return accepted
+
     def heartbeat(self, body: dict) -> None:
         self._request("POST", "/api/fleet/heartbeat", body, auth=True)
+
+    def call_agent(self, node_id: str, runtime: str, agent_id: str, prompt: str) -> dict:
+        """让其他端上的智能体或子智能体执行任务。云端负责派到那一台。"""
+        result = self._request(
+            "POST",
+            "/api/fleet/call",
+            {
+                "node_id": node_id,
+                "runtime": runtime,
+                "agent_id": agent_id,
+                "prompt": prompt,
+            },
+            auth=True,
+        )
+        logger.info(
+            "call peer node=%s runtime=%s agent=%s task=%s kind=%s",
+            result.get("node_id"),
+            runtime,
+            agent_id,
+            result.get("id"),
+            result.get("kind"),
+        )
+        return result
 
     def claim(self) -> dict | None:
         data = self._request("POST", "/api/fleet/claim", {}, auth=True)
@@ -426,29 +489,40 @@ def main() -> int:
     if token_path.is_file():
         cloud.node_token = token_path.read_text(encoding="utf-8").strip()
         logger.info("loaded node token file=%s", token_path)
+    hello = {
+        "node_id": node_id,
+        "name": args.name or hostname.split(".")[0] or node_id,
+        "hostname": hostname,
+        "platform": identity["platform"],
+        "agents": agents,
+        "mode": args.mode,
+        "webhook_url": args.webhook_url if args.mode == "webhook" else "",
+    }
+    try:
+        accepted = cloud.handshake(hello)
+    except Exception:
+        if not cloud.node_token:
+            logger.exception("handshake failed node=%s", node_id)
+            return 2
+        logger.exception("handshake failed, keep saved token node=%s", node_id)
     else:
-        enrolled = cloud.enroll(
-            {
-                "node_id": node_id,
-                "name": args.name or hostname.split(".")[0] or node_id,
-                "hostname": hostname,
-                "platform": identity["platform"],
-                "agents": agents,
-                "mode": args.mode,
-                "webhook_url": args.webhook_url if args.mode == "webhook" else "",
-            }
-        )
-        token_path.parent.mkdir(parents=True, exist_ok=True)
-        token_path.write_text(enrolled["node_token"], encoding="utf-8")
-        try:
-            token_path.chmod(0o600)
-        except OSError:
-            logger.warning("chmod token file failed path=%s", token_path)
+        token = accepted.get("node_token") or ""
+        if not token and not cloud.node_token:
+            logger.error("handshake missing node token node=%s", node_id)
+            return 2
+        if token:
+            token_path.parent.mkdir(parents=True, exist_ok=True)
+            token_path.write_text(token, encoding="utf-8")
+            try:
+                token_path.chmod(0o600)
+            except OSError:
+                logger.warning("chmod token file failed path=%s", token_path)
+        peers = accepted.get("peers") or []
         logger.info(
-            "reported node=%s agents=%d bound=%s，请在控制台绑定后再派单",
-            node_id,
+            "bound local agents=%d peers=%d node=%s",
             len(agents),
-            enrolled.get("bound"),
+            len(peers) if isinstance(peers, list) else 0,
+            node_id,
         )
 
     if args.mode == "webhook":

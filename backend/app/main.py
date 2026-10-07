@@ -15,6 +15,7 @@ from app.api import (
     orchestration,
     outputs,
     projects,
+    super_ai,
     system,
     tasks,
     workspaces,
@@ -145,6 +146,7 @@ def create_app() -> FastAPI:
     app.include_router(content_roots.router)
     app.include_router(outputs.router)
     app.include_router(system.router)
+    app.include_router(super_ai.router)
     app.include_router(fleet.router)
     app.include_router(ws.router)
     from app.core.static_ui import mount_static_ui

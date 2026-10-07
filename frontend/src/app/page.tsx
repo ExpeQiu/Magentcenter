@@ -1,12 +1,11 @@
-"use client";
+import type { Metadata } from "next";
+import { SuperAiPage } from "@/components/super-ai/super-ai-page";
 
-import { useEffect } from "react";
-import { getLastWorkspaceSlug } from "@/lib/context/workspace-context";
-import { paths } from "@/lib/paths";
+export const metadata: Metadata = {
+  title: "超级AI · AgentCenter",
+  description: "用语音或文字调用任务、知识库、技能与系统状态",
+};
 
 export default function Home() {
-  useEffect(() => {
-    window.location.replace(paths.root(getLastWorkspaceSlug()));
-  }, []);
-  return <p className="p-6 text-sm text-slate-400">正在进入工作区…</p>;
+  return <SuperAiPage />;
 }

@@ -30,6 +30,8 @@ export function normalizeNode(node: FleetNode): FleetNode {
     bound: Boolean(node.bound),
     queued_count: node.queued_count ?? 0,
     running_count: node.running_count ?? 0,
+    capabilities: Array.isArray(node.capabilities) ? node.capabilities : [],
+    handshake: node.handshake || "",
   };
 }
 

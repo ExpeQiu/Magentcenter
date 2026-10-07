@@ -47,12 +47,45 @@ class BindRequest(BaseModel):
     agents: list[AgentPick] = Field(default_factory=list)
 
 
+class HandshakeRequest(BaseModel):
+    enroll_token: str
+    node_id: str
+    nonce: str
+    name: str = ""
+    runtimes: list[str] = Field(default_factory=list)
+    agents: list[AgentPick] = Field(default_factory=list)
+    hostname: str = ""
+    platform: str = ""
+    mode: str = "plugin"
+    webhook_url: str = ""
+
+
+class HandshakeAcceptRequest(BaseModel):
+    enroll_token: str
+    node_id: str
+    proof: str
+    workspace_id: str = ""
+
+
+class LinkRequest(BaseModel):
+    cloud_url: str = ""
+    workspace_id: str = ""
+
+
 class FinishRequest(BaseModel):
     status: str
     output: str = ""
     error: str = ""
     session_id: str = ""
     duration_ms: int = 0
+
+
+class CallRequest(BaseModel):
+    node_id: str
+    runtime: str
+    agent_id: str
+    prompt: str
+    workspace_id: str = ""
 
 
 def _auth_error(exc: FleetAuthError) -> HTTPException:
@@ -66,6 +99,89 @@ def _fleet_error(exc: FleetError) -> HTTPException:
 @router.get("/nodes")
 async def list_nodes(workspace_id: str = Query(default="")):
     return await fleet_service.list_nodes(workspace_id)
+
+
+@router.get("/link")
+async def get_link(request: Request, workspace_id: str = Query(default="")):
+    settings = request.app.state.settings
+    return await fleet_service.link_status(workspace_id, settings.fleet_cloud_url)
+
+
+@router.post("/link")
+async def open_link(req: LinkRequest, request: Request):
+    settings = request.app.state.settings
+    try:
+        return await fleet_service.open_link(
+            cloud_url=req.cloud_url,
+            workspace_id=req.workspace_id,
+            registry=request.app.state.registry,
+            enroll_token=settings.fleet_enroll_token,
+        )
+    except FleetAuthError as e:
+        raise _auth_error(e)
+    except FleetError as e:
+        raise _fleet_error(e)
+
+
+@router.get("/catalog")
+async def catalog(
+    workspace_id: str = Query(default=""),
+    x_node_token: str = Header(default=""),
+):
+    try:
+        if x_node_token:
+            rec = await fleet_service.authenticate(x_node_token)
+            if rec is None:
+                raise FleetAuthError("invalid node token")
+            peers = await fleet_service.peer_catalog(
+                exclude=rec.id,
+                workspace_id=rec.workspace_id or "",
+            )
+        else:
+            peers = await fleet_service.peer_catalog(workspace_id=workspace_id)
+    except FleetAuthError as e:
+        raise _auth_error(e)
+    return {"peers": peers}
+
+
+@router.post("/handshake")
+async def handshake(req: HandshakeRequest, request: Request):
+    settings = request.app.state.settings
+    try:
+        return await fleet_service.begin_handshake(
+            enroll_token=req.enroll_token,
+            expected_token=settings.fleet_enroll_token,
+            node_id=req.node_id,
+            nonce=req.nonce,
+            name=req.name,
+            runtimes=req.runtimes,
+            agents=[a.model_dump() for a in req.agents],
+            hostname=req.hostname,
+            platform=req.platform,
+            mode=req.mode,
+            webhook_url=req.webhook_url,
+        )
+    except FleetAuthError as e:
+        raise _auth_error(e)
+    except FleetError as e:
+        raise _fleet_error(e)
+
+
+@router.post("/handshake/accept")
+async def handshake_accept(req: HandshakeAcceptRequest, request: Request):
+    settings = request.app.state.settings
+    try:
+        return await fleet_service.complete_handshake(
+            enroll_token=req.enroll_token,
+            expected_token=settings.fleet_enroll_token,
+            node_id=req.node_id,
+            proof=req.proof,
+            workspace_id=req.workspace_id,
+        )
+    except FleetAuthError as e:
+        raise _auth_error(e)
+    except FleetError as e:
+        raise _fleet_error(e)
 
 
 @router.get("/scan")
@@ -134,6 +250,39 @@ async def heartbeat(
         )
     except FleetAuthError as e:
         raise _auth_error(e)
+
+
+@router.post("/call")
+async def call_peer(
+    req: CallRequest,
+    request: Request,
+    x_node_token: str = Header(default=""),
+):
+    """已绑定终端调用其他端的智能体。无令牌时调用方是云端本机。"""
+    manager = request.app.state.task_manager
+    try:
+        if x_node_token:
+            return await fleet_service.call_peer_from_token(
+                x_node_token,
+                target=req.node_id,
+                runtime=req.runtime,
+                agent_id=req.agent_id,
+                prompt=req.prompt,
+                task_manager=manager,
+                workspace_id=req.workspace_id,
+            )
+        return await fleet_service.call_peer_as_cloud(
+            target=req.node_id,
+            runtime=req.runtime,
+            agent_id=req.agent_id,
+            prompt=req.prompt,
+            task_manager=manager,
+            workspace_id=req.workspace_id,
+        )
+    except FleetAuthError as e:
+        raise _auth_error(e)
+    except FleetError as e:
+        raise _fleet_error(e)
 
 
 @router.post("/claim")

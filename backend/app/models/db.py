@@ -145,6 +145,10 @@ class FleetNodeRecord(Base):
     seen_json: Mapped[str] = mapped_column(Text, default="[]")
     last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     load: Mapped[float | None] = mapped_column(Float, nullable=True)
+    handshake_state: Mapped[str] = mapped_column(String(16), default="")
+    handshake_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    handshake_challenge: Mapped[str] = mapped_column(String(64), default="")
+    handshake_expires: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -230,6 +234,10 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("fleet_nodes", "agents_json", "TEXT DEFAULT '[]'"),
     ("fleet_nodes", "seen_json", "TEXT DEFAULT '[]'"),
     ("fleet_nodes", "workspace_id", "VARCHAR(64) DEFAULT ''"),
+    ("fleet_nodes", "handshake_state", "VARCHAR(16) DEFAULT ''"),
+    ("fleet_nodes", "handshake_at", "DATETIME"),
+    ("fleet_nodes", "handshake_challenge", "VARCHAR(64) DEFAULT ''"),
+    ("fleet_nodes", "handshake_expires", "DATETIME"),
     ("knowledge_entries", "layer", "VARCHAR(16) DEFAULT ''"),
     ("knowledge_entries", "facet", "VARCHAR(32) DEFAULT ''"),
 ]

@@ -26,6 +26,7 @@ import type {
   SwarmGraph,
   SystemStatus,
   FleetAgent,
+  FleetLink,
   FleetNode,
   FleetScan,
   TaskInfo,
@@ -132,6 +133,16 @@ export const api = {
       `/api/fleet/nodes/${encodeURIComponent(nodeId)}`,
       { method: "DELETE" }
     ),
+  fleetLink: (workspaceId = "") => {
+    const q = workspaceId ? `?workspace_id=${encodeURIComponent(workspaceId)}` : "";
+    return request<FleetLink>(`/api/fleet/link${q}`);
+  },
+  fleetOpenLink: (body: { cloud_url?: string; workspace_id?: string }) =>
+    request<FleetLink>("/api/fleet/link", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   workspaces: () => request<WorkspaceInfo[]>("/api/workspaces"),
   workspaceBySlug: (slug: string) =>
     request<WorkspaceInfo>(`/api/workspaces/by-slug/${encodeURIComponent(slug)}`),
@@ -593,4 +604,34 @@ export const api = {
     request<OutputFile>(
       `/api/outputs/file?path=${encodeURIComponent(path)}`
     ),
+  superAiTurn: (body: SuperAiTurnRequest) =>
+    request<SuperAiTurnResponse>("/api/super-ai/turn", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
 };
+
+export interface SuperAiPending {
+  action: "create_task";
+  prompt: string;
+  agent_id: string;
+  agent_name: string;
+  runtime: "openclaw" | "hermes";
+}
+
+export interface SuperAiTurnRequest {
+  text: string;
+  workspace_slug: string;
+  pending?: SuperAiPending | null;
+  last_href?: string;
+}
+
+export interface SuperAiTurnResponse {
+  run_id: string;
+  reply: string;
+  intent: string;
+  service: string;
+  href: string;
+  pending: SuperAiPending | null;
+}

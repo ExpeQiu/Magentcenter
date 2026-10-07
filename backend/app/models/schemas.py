@@ -223,3 +223,56 @@ class CreateAutopilotRequest(BaseModel):
     runtime: Literal["openclaw", "hermes"] = "openclaw"
     sync_to_openclaw: bool = False
     sync_to_hermes: bool = False
+
+
+class SuperAiPending(BaseModel):
+    """写操作确认单。前端原样带回，确认后才执行。"""
+
+    action: Literal["create_task"]
+    prompt: str
+    agent_id: str
+    agent_name: str = ""
+    runtime: Literal["openclaw", "hermes"] = "openclaw"
+
+
+class SuperAiTurnRequest(BaseModel):
+    text: str = ""
+    workspace_slug: str = "cyber"
+    pending: SuperAiPending | None = None
+    last_href: str = ""
+
+
+class SuperAiTurnResponse(BaseModel):
+    run_id: str
+    reply: str
+    intent: str
+    service: str = ""
+    href: str = ""
+    pending: SuperAiPending | None = None
+    task_id: str = ""
+    task_status: str = ""
+
+
+class DeviceEnrollRequest(BaseModel):
+    enroll_token: str
+    device_id: str
+    name: str = ""
+
+
+class DeviceEnrollResponse(BaseModel):
+    device_id: str
+    device_token: str
+    name: str
+
+
+class DeviceTurnRequest(BaseModel):
+    text: str = ""
+    workspace_slug: str = "cyber"
+    pending: SuperAiPending | None = None
+
+
+class DeviceTaskResponse(BaseModel):
+    task_id: str
+    status: str
+    done: bool
+    reply: str

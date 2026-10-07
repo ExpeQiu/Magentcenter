@@ -100,9 +100,11 @@
 云端只做协调器。设备名册来自扫描和绑定，不写死。
 
 - 本机：控制台 `/{workspace}/fleet` 扫描协调器上的 OpenClaw / Hermes，勾选后绑定。绑定的智能体由协调器本机执行
+- 握手：同一页「握手并绑定」用注册令牌和云端互相证明，把本机智能体绑定到云端，并取回其他已绑定端的智能体与能力（`openclaw.agent` / `hermes.chat` / `task.execute`）。地址留空表示这台协调器。云端若还是旧接口（没有 `/api/fleet/handshake`），则改走注册和设备列表。已写在 `data/fleet_link.json` 的地址不会被 `FLEET_CLOUD_URL` 盖回
 - 其他设备：安装独立包 `fleet-edge/`（`pip install` 后运行 `fleet-edge`）。它在 NAT 后扫描本机智能体并上报。控制台里对待绑定设备勾选确认
 - 侧栏按设备名切换当前终端。多端页和新建任务都跟着这台设备走
-- 给智能体分配任务只在「任务」里做。已绑定设备上的智能体会出现在新建任务的列表中，并带到对应设备
+- 给智能体分配任务可以在「任务」里做。已绑定设备上的智能体会出现在新建任务的列表中，并带到对应设备
+- 任意已绑定端（含云端本机）可以调用其他端上的智能体或子智能体：`POST /api/fleet/call`。带设备令牌时调用方是该终端；不带令牌时调用方是云端本机。目标必须是另一台已绑定设备上的智能体。绑定列表中的第一个是主智能体，其余按子智能体派发。目标在云端本机则由协调器执行，在其他设备则排队等该设备领取并回写结果
 - `node_id=auto` 只选当前在线、且已绑定该智能体的设备。指定离线设备时任务排队，等连接器来领
 - 设备地址能被云端访问时，可用 webhook（签名头 `X-Fleet-Timestamp` + `X-Fleet-Signature`，算法与飞书机器人相同）
 - 令牌只存哈希。注册令牌 `FLEET_ENROLL_TOKEN`，设备令牌落在 `~/.agentcenter/<node>.token`
@@ -124,4 +126,12 @@
 - **Phase 13**：桌面端 Tauri 2 DMG（静态前端 + FastAPI sidecar，见 ADR-002）
 - **Phase 14**：Outputs→ArtifactRef 批量建指；Embedding 批量重嵌入；告警 profile 导入导出；卡片质量评分
 - **Phase 15**：多端只做扫描和绑定。给智能体的任务统一从「任务」发出
-- **Phase 16（当前）**：知识库改为 Personal Wiki 三层加权召回；技能捕获 / 提炼 / 验证已按 ADR-003 落地
+- **Phase 16**：知识库改为 Personal Wiki 三层加权召回；技能捕获 / 提炼 / 验证已按 ADR-003 落地
+- **Phase 17（当前）**：首页为「超级AI」对话页。`POST /api/super-ai/turn` 统一处理文字与语音转写，只调用任务、知识库、技能、输出物、系统、多端；建任务须回复「确认」
+
+## 超级AI 首页
+
+- 路由 `/` 是对话页，控制台仍在 `/{workspace}/tasks`
+- 意图是规则白名单，认不出只追问
+- 日志键：`run_id`、`intent`、`service`、`workspace`
+- ESP32 用 `FLEET_ENROLL_TOKEN` 登记为语音终端（`mode=voice`），不领任务。`POST /api/super-ai/device/turn` 对话；确认后云端调度执行，设备用 `GET /api/super-ai/device/tasks/{id}` 收回结果。固件在 `firmware/esp32/super_ai/`

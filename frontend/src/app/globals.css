@@ -6,6 +6,35 @@ body {
   @apply bg-slate-950 text-slate-100;
 }
 
+@keyframes super-breathe {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+@keyframes super-talk {
+  0%,
+  100% {
+    transform: scaleY(0.28);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.super-breathe {
+  animation: super-breathe 3.6s ease-in-out infinite;
+}
+
+.super-talk {
+  transform-origin: center;
+  animation: super-talk 0.28s ease-in-out infinite;
+}
+
 /* 输出物 Markdown 预览 */
 .md-preview h1 {
   @apply mb-4 mt-2 border-b border-slate-700 pb-2 text-2xl font-semibold text-slate-100;
