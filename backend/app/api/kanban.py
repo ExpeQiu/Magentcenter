@@ -13,6 +13,7 @@ from app.core.hermes_kanban import (
     KanbanTask,
     SwarmGraph,
 )
+from app.core.office_drive import OfficeDriveEvent, OfficeDriveIn, office_drive
 from app.models.schemas import CreateTaskRequest, TaskInfo
 
 logger = logging.getLogger(__name__)
@@ -108,6 +109,36 @@ async def create_swarm(req: CreateSwarmRequest, request: Request):
         return graph
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+
+class OfficeDrivePoll(BaseModel):
+    events: list[OfficeDriveEvent]
+    latest: int
+
+
+@router.get("/office/drive", response_model=OfficeDrivePoll)
+async def poll_office_drive(after: int = Query(0, ge=0)):
+    events, latest = office_drive.since(after)
+    return OfficeDrivePoll(events=events, latest=latest)
+
+
+@router.post("/office/drive", response_model=OfficeDriveEvent, status_code=201)
+async def push_office_drive(req: OfficeDriveIn):
+    if len(req.script) > 4000:
+        raise HTTPException(status_code=400, detail="script too long")
+    if len(req.beats) > 40:
+        raise HTTPException(status_code=400, detail="too many beats")
+    if not req.script.strip() and not req.beats:
+        raise HTTPException(status_code=400, detail="script or beats required")
+    event = office_drive.push(req)
+    logger.info(
+        "office drive id=%s source=%s beats=%d script_len=%d",
+        event.id,
+        event.source,
+        len(event.beats),
+        len(event.script),
+    )
+    return event
 
 
 @router.get("/swarm/{root_id}", response_model=SwarmGraph)

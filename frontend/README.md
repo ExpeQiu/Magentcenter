@@ -11,7 +11,7 @@ Next.js App Router。开发端口 **3013**，由仓库根目录 `./scripts/start
 | `/{slug}/squads` | 小队 |
 | `/{slug}/autopilots` | 定时任务 |
 | `/{slug}/skills` | 技能 |
-| `/{slug}/kanban` | Hermes Kanban |
+| `/{slug}/kanban` | 数字办公室：工位、任务流、白板 |
 | `/{slug}/fleet` | 多端关系图谱：云端、设备与智能体 |
 | `/{slug}/system` | 双栈状态与告警 |
 | `/{slug}/sessions` | 会话。详情是 `sessions/detail?id=` |

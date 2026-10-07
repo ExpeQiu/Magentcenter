@@ -458,6 +458,14 @@ export const api = {
     }),
   getSwarm: (rootId: string) =>
     request<SwarmGraph>(`/api/kanban/swarm/${encodeURIComponent(rootId)}`),
+  officeDriveSince: (after = 0) =>
+    request<OfficeDrivePoll>(`/api/kanban/office/drive?after=${after}`),
+  officeDrivePush: (body: OfficeDrivePush) =>
+    request<OfficeDriveEvent>("/api/kanban/office/drive", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }),
   knowledgeSearch: (
     q: string,
     opts?: {
@@ -634,4 +642,34 @@ export interface SuperAiTurnResponse {
   service: string;
   href: string;
   pending: SuperAiPending | null;
+}
+
+export interface OfficeDriveBeat {
+  agent?: string;
+  to?: string;
+  pose?: string;
+  say?: string;
+  board?: string;
+  task_id?: string;
+  task_status?: string;
+  hold_ms?: number;
+}
+
+export interface OfficeDriveEvent {
+  id: number;
+  at: number;
+  source: string;
+  script: string;
+  beats: OfficeDriveBeat[];
+}
+
+export interface OfficeDrivePoll {
+  events: OfficeDriveEvent[];
+  latest: number;
+}
+
+export interface OfficeDrivePush {
+  script?: string;
+  beats?: OfficeDriveBeat[];
+  source?: string;
 }

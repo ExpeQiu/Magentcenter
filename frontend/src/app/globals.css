@@ -108,8 +108,129 @@ body {
   animation: fleet-flow 1.8s linear infinite;
 }
 
+.office-duty {
+  scrollbar-width: none;
+}
+
+.office-duty::-webkit-scrollbar {
+  display: none;
+}
+
+.office-floor-plane {
+  background-color: #141c28;
+  background-image:
+    linear-gradient(rgba(148, 163, 184, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148, 163, 184, 0.05) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+.office-bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -4px;
+  height: 8px;
+  width: 8px;
+  transform: translateX(-50%) rotate(45deg);
+  background: white;
+}
+
+.office-actor {
+  transform: translate(-50%, -50%);
+  transition:
+    left 1.05s cubic-bezier(0.22, 0.8, 0.32, 1),
+    top 1.05s cubic-bezier(0.22, 0.8, 0.32, 1);
+}
+
+@keyframes office-bob {
+  0%,
+  100% {
+    transform: translate(-50%, -50%);
+  }
+  50% {
+    transform: translate(-50%, calc(-50% - 5px));
+  }
+}
+
+.office-bob {
+  animation: office-bob 0.42s ease-in-out infinite;
+}
+
+.office-leg {
+  fill: none;
+  stroke: #334155;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.office-leg-a,
+.office-leg-b {
+  transform-box: fill-box;
+  transform-origin: center top;
+}
+
+.office-leg-a {
+  animation: office-step 0.46s ease-in-out infinite;
+}
+
+.office-leg-b {
+  animation: office-step 0.46s ease-in-out infinite reverse;
+}
+
+@keyframes office-step {
+  0%,
+  100% {
+    transform: rotate(22deg);
+  }
+  50% {
+    transform: rotate(-22deg);
+  }
+}
+
+.office-person-picked {
+  filter: drop-shadow(0 0 3px white);
+}
+
+@keyframes office-talk {
+  0%,
+  100% {
+    transform: translate(-50%, -50%) scale(1);
+  }
+  50% {
+    transform: translate(-50%, -50%) scale(1.06);
+  }
+}
+
+.office-talk {
+  animation: office-talk 0.7s ease-in-out infinite;
+}
+
+@keyframes office-desk {
+  0%,
+  100% {
+    box-shadow: inset 0 0 0 0 rgba(56, 189, 248, 0);
+  }
+  50% {
+    box-shadow: inset 0 0 0 2px rgba(56, 189, 248, 0.65);
+  }
+}
+
+.office-desk-live {
+  animation: office-desk 1.4s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .fleet-edge-live {
+  .fleet-edge-live,
+  .office-bob,
+  .office-talk,
+  .office-desk-live,
+  .office-leg-a,
+  .office-leg-b {
     animation: none;
+  }
+
+  .office-actor {
+    transition: none;
   }
 }
