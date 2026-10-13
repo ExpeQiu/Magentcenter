@@ -1,6 +1,6 @@
 [package]
 name = "agentcenter"
-version = "0.3.0"
+version = "0.4.0"
 description = "AgentCenter 桌面端（Tauri 2 + FastAPI sidecar）"
 authors = ["AgentCenter"]
 edition = "2021"

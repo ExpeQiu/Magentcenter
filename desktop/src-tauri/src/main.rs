@@ -209,11 +209,42 @@ fn eval_main(app: &AppHandle, js: &str) {
 }
 
 fn navigate_home(app: &AppHandle) {
-    desktop_log("navigate ui");
-    eval_main(
-        app,
-        &format!("window.location.replace('{API_HOME}')"),
-    );
+    // WKWebView 会记住升级前的首页。旧 HTML 去拉已经不存在的 chunk，页面就停在「正在进入工作区…」。
+    // 先清站点数据，再用一次性查询参数打开，避免命中旧缓存。
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let url = format!("{API_HOME}?ac={stamp}");
+    desktop_log(&format!("navigate ui url={url}"));
+    let handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        let Some(window) = handle.get_webview_window("main") else {
+            desktop_log("navigate skipped: main window missing");
+            return;
+        };
+        if let Err(e) = window.clear_all_browsing_data() {
+            desktop_log(&format!("clear webview cache failed err={e}"));
+        }
+        let handle2 = handle.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(400));
+            let handle3 = handle2.clone();
+            let _ = handle2.run_on_main_thread(move || {
+                let Some(window) = handle3.get_webview_window("main") else {
+                    return;
+                };
+                match url.parse::<tauri::Url>() {
+                    Ok(parsed) => {
+                        if let Err(e) = window.navigate(parsed) {
+                            desktop_log(&format!("navigate failed err={e}"));
+                        }
+                    }
+                    Err(e) => desktop_log(&format!("bad ui url err={e}")),
+                }
+            });
+        });
+    });
 }
 
 fn boot(app: AppHandle) {

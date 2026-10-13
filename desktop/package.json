@@ -1,7 +1,7 @@
 {
   "name": "agentcenter-desktop",
   "productName": "AgentCenter",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "AgentCenter 本地桌面应用：Tauri 2 + FastAPI sidecar",
   "author": "AgentCenter",
   "private": true,

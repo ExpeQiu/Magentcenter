@@ -154,9 +154,12 @@ def mount_static_ui(app: FastAPI) -> None:
 
     logger.info("static ui mounted root=%s", root)
 
+    # 首页也必须 no-store：否则部署后浏览器继续用旧 index.html，去拉已删除的旧 chunk → 卡在「正在进入工作区…」
+    _NO_STORE = {"Cache-Control": "no-store"}
+
     @app.get("/", include_in_schema=False)
     async def serve_static_home():
-        return FileResponse(index)
+        return FileResponse(index, headers=_NO_STORE)
 
     @app.get("/{full_path:path}", include_in_schema=False)
     async def serve_static_ui(full_path: str, request: Request):
@@ -171,7 +174,7 @@ def mount_static_ui(app: FastAPI) -> None:
             headers = {}
             suffix = result.path.suffix.lower()
             if suffix in {".js", ".css", ".txt", ".html"}:
-                headers["Cache-Control"] = "no-store"
+                headers = _NO_STORE
             return FileResponse(result.path, headers=headers)
 
         logger.warning("static ui miss path=%s", full_path)

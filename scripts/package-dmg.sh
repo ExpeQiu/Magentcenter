@@ -111,8 +111,11 @@ else
   fi
 
   log "pip install backend requirements"
-  "$RUNTIME/python/bin/python3" -m pip install --upgrade pip
-  "$RUNTIME/python/bin/python3" -m pip install -r "$RUNTIME/backend/requirements.txt"
+  "$RUNTIME/python/bin/python3" -m pip install --upgrade pip \
+    || log "WARN: pip upgrade failed, continue with bundled pip"
+  PIP_DEFAULT_TIMEOUT=180 "$RUNTIME/python/bin/python3" -m pip install \
+    --retries 8 --timeout 180 \
+    -r "$RUNTIME/backend/requirements.txt"
 fi
 
 if [[ -f "$RUNTIME/.env" ]]; then

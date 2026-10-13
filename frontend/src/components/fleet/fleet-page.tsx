@@ -68,6 +68,7 @@ export function FleetPage() {
         .then((data) => {
           if (cancelled) return;
           setLink(data);
+          setLinkError("");
           if (!cloudTouched.current) setCloudUrl(data.cloud_url || "");
           console.info(
             "fleet link state=%s node=%s peers=%d",
