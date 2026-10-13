@@ -186,7 +186,7 @@ async def system_status(request: Request, refresh: bool = False) -> SystemStatus
 @router.get("/sessions", response_model=list[SessionInfo])
 async def list_sessions(
     request: Request,
-    limit: int = Query(50, ge=1, le=200),
+    limit: int = Query(50, ge=1, le=2000),
 ) -> list[SessionInfo]:
     monitor = request.app.state.monitor
     sessions, _ = await monitor.get_sessions(limit=limit)

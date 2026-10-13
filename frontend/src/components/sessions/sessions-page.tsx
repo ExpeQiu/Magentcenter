@@ -25,7 +25,7 @@ export function SessionsPage() {
 
   useEffect(() => {
     api
-      .sessions(100)
+      .sessions(2000)
       .then(setSessions)
       .catch(console.error)
       .finally(() => setLoading(false));

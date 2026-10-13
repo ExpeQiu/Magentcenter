@@ -94,11 +94,13 @@ fn ensure_user_dirs(runtime: &Path) {
 }
 
 fn prepend_path() {
+    // npm-global OpenClaw matches the running gateway. Homebrew's older
+    // binary is first on a typical PATH and rejects the current config.
     let extras = [
+        home_dir().join(".npm-global/bin").display().to_string(),
+        home_dir().join(".local/bin").display().to_string(),
         "/opt/homebrew/bin".to_string(),
         "/usr/local/bin".to_string(),
-        home_dir().join(".local/bin").display().to_string(),
-        home_dir().join(".npm-global/bin").display().to_string(),
     ];
     let old = std::env::var("PATH").unwrap_or_default();
     let mut parts = extras.to_vec();

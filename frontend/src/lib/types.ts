@@ -354,6 +354,32 @@ export interface ProjectInfo {
   updated_at: string;
 }
 
+export interface SopStepInfo {
+  id: string;
+  sop_id: string;
+  position: number;
+  title: string;
+  instruction: string;
+  skill_name: string;
+}
+
+export interface SopInfo {
+  id: string;
+  workspace_id: string;
+  name: string;
+  description: string;
+  step_count: number;
+  run_count: number;
+  steps: SopStepInfo[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SopRunResult {
+  sop_id: string;
+  task_ids: string[];
+}
+
 export interface AutopilotInfo {
   id: string;
   name: string;

@@ -21,6 +21,18 @@ HIDDEN_DIR_PREFIX = "_"
 ARCHIVE_DIR_NAME = "_archive"
 BODY_PREVIEW_CHARS = 4000
 SHORT_DESC_LIMIT = 160
+# WaytoAI/skills 顶层目录。与 skill_catalog.ALL_CATEGORIES 保持一致。
+CATALOG_DIR_CATEGORIES = frozenset(
+    {
+        "engineering",
+        "productivity",
+        "research",
+        "domain",
+        "misc",
+        "in-progress",
+        "deprecated",
+    }
+)
 
 
 class SkillInfo(BaseModel):
@@ -167,6 +179,19 @@ def _parse_skill_file(skill_md: Path, skill_id: str) -> dict[str, Any]:
     }
 
 
+def category_from_entry(entry: Path) -> str:
+    """按真实路径回溯 WaytoAI/skills/<目录>，symlink 也归到仓库目录。"""
+    try:
+        real = entry.resolve()
+    except OSError as exc:
+        logger.warning("skill path resolve failed path=%s err=%s", entry, exc)
+        return ""
+    for parent in real.parents:
+        if parent.name in CATALOG_DIR_CATEGORIES:
+            return parent.name
+    return ""
+
+
 def _entry_to_info(
     entry: Path,
     *,
@@ -192,6 +217,7 @@ def _entry_to_info(
         archived=archived,
         runtime=runtime,
         status=parsed.get("status") or "",
+        category=category_from_entry(entry),
     )
 
 
@@ -382,11 +408,16 @@ def scan_all_skills(
         index = load_catalog_index(Path(catalog_dir).expanduser())
         apply_catalog_categories(kept, index)
     merged = catalog + kept
+    groups: dict[str, int] = {}
+    for item in merged:
+        key = item.category or "ungrouped"
+        groups[key] = groups.get(key, 0) + 1
     logger.info(
-        "skills merged catalog=%d runtime=%d total=%d",
+        "skills merged catalog=%d runtime=%d total=%d groups=%s",
         len(catalog),
         len(kept),
         len(merged),
+        " ".join(f"{name}={count}" for name, count in sorted(groups.items())),
     )
     return merged
 
@@ -439,7 +470,7 @@ def get_skill(
             archived=archived,
             runtime=runtime,
             status=parsed.get("status") or "",
-            category=entry.parent.name if runtime == "catalog" else "",
+            category=category_from_entry(entry),
             bound=runtime == "catalog",
             body_preview=parsed["body"][:BODY_PREVIEW_CHARS],
             skill_md_path=str(skill_md),

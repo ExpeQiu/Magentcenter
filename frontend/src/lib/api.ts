@@ -22,6 +22,8 @@ import type {
   SkillInfo,
   SkillCapture,
   SkillMineRecord,
+  SopInfo,
+  SopRunResult,
   SquadInfo,
   SwarmGraph,
   SystemStatus,
@@ -258,6 +260,43 @@ export const api = {
   deleteProjectResource: (projectId: string, resourceId: string) =>
     request<void>(`/api/projects/${projectId}/resources/${resourceId}`, {
       method: "DELETE",
+    }),
+  sops: (workspaceId?: string) => {
+    const q = workspaceId
+      ? `?workspace_id=${encodeURIComponent(workspaceId)}`
+      : "";
+    return request<SopInfo[]>(`/api/sops${q}`);
+  },
+  sop: (id: string) => request<SopInfo>(`/api/sops/${id}`),
+  createSop: (data: { name: string; description?: string; workspace_id?: string }) =>
+    request<SopInfo>("/api/sops", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteSop: (id: string) => request<void>(`/api/sops/${id}`, { method: "DELETE" }),
+  addSopStep: (
+    sopId: string,
+    data: { title: string; instruction?: string; skill_name?: string }
+  ) =>
+    request<SopInfo>(`/api/sops/${sopId}/steps`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    }),
+  deleteSopStep: (sopId: string, stepId: string) =>
+    request<SopInfo>(`/api/sops/${sopId}/steps/${stepId}`, { method: "DELETE" }),
+  reorderSopSteps: (sopId: string, stepIds: string[]) =>
+    request<SopInfo>(`/api/sops/${sopId}/steps/reorder`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ step_ids: stepIds }),
+    }),
+  runSop: (sopId: string, data: { agent_id: string; runtime?: "openclaw" | "hermes" }) =>
+    request<SopRunResult>(`/api/sops/${sopId}/run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
     }),
   squad: (id: string) => request<SquadInfo>(`/api/squads/${id}`),
   createSquadTask: (squadId: string, prompt: string) =>
@@ -511,11 +550,28 @@ export const api = {
     const qs = params.toString();
     return request<KnowledgeHit[]>(`/api/knowledge/entries${qs ? `?${qs}` : ""}`);
   },
-  knowledgeBackfill: (limit = 200) =>
-    request<{ indexed: number; status: string; embedding?: EmbeddingStatus }>(
-      `/api/knowledge/backfill?limit=${limit}`,
-      { method: "POST" }
-    ),
+  knowledgeBackfill: (limit = 200) => {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 90_000);
+    return request<{
+      indexed: number;
+      status: string;
+      embedding?: EmbeddingStatus;
+      sessions?: {
+        scanned: number;
+        written: number;
+        skipped: number;
+        errors: number;
+        preferences: number;
+        decisions: number;
+        procedural: number;
+        reflections: number;
+      };
+    }>(`/api/knowledge/backfill?limit=${limit}`, {
+      method: "POST",
+      signal: ctrl.signal,
+    }).finally(() => clearTimeout(timer));
+  },
   knowledgeMineVault: (body?: {
     scope?: string;
     limit?: number;

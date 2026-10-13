@@ -15,6 +15,27 @@ def test_redact_secrets():
     assert "REDACTED" in out
 
 
+def test_session_claims_keep_decision_and_steps():
+    from app.core.knowledge_session_mine import extract_claims
+
+    claims = extract_claims(
+        "以后都不要再把密钥写进仓库。这次决定走本地库，不调远程。",
+        "按这个做：\n1. 先读会话原文\n2. 只留下拍板和步骤\n中间报错是根因没对齐。",
+    )
+    facets = {c["facet"] for c in claims}
+    assert "preferences" in facets
+    assert "decisions" in facets
+    assert "procedural" in facets
+    assert "reflections" in facets
+
+
+def test_session_claims_skip_chatter():
+    from app.core.knowledge_session_mine import extract_claims
+
+    assert extract_claims("好", "NO_REPLY") == []
+    assert extract_claims("[OpenClaw heartbeat poll]", "NO_REPLY") == []
+
+
 def test_rule_summary_truncates():
     s = _rule_summary("写一个 hello world", "ok done with hello world", "")
     assert "hello" in s.lower()

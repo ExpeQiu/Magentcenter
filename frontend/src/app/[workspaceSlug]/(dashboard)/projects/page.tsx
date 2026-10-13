@@ -1,5 +1,5 @@
-import { ProjectsPage } from "@/components/projects/projects-page";
+import { SopsPage } from "@/components/sops/sops-page";
 
 export default function Page() {
-  return <ProjectsPage />;
+  return <SopsPage />;
 }

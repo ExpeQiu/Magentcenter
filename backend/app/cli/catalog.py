@@ -1,0 +1,362 @@
+"""ac 对外命令目录。capabilities 与 agent/manifest.json 以此为准。"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from app.cli.output import EXIT_CODES
+
+# agent_safe: true | background_only | write_with_confirm | false
+COMMANDS: list[dict[str, Any]] = [
+    {
+        "name": "capabilities",
+        "description": "列出当前 CLI 支持的命令、副作用和退出码",
+        "cli_template": "ac capabilities --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 5,
+        "side_effect": "read",
+    },
+    {
+        "name": "health",
+        "description": "协调器健康检查",
+        "cli_template": "ac health --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "agents-list",
+        "description": "列出智能体",
+        "cli_template": "ac agents list --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+    },
+    {
+        "name": "agents-get",
+        "description": "查看智能体",
+        "cli_template": "ac agents get {agent_id} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+        "params": {"agent_id": {"type": "string"}},
+    },
+    {
+        "name": "agents-stats",
+        "description": "智能体任务统计",
+        "cli_template": "ac agents stats --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "tasks-list",
+        "description": "列出任务",
+        "cli_template": "ac tasks list --status {status} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+        "params": {
+            "status": {"type": "string", "description": "queued|running|completed|failed|cancelled"},
+            "page": {"type": "integer", "default": 1},
+        },
+    },
+    {
+        "name": "tasks-get",
+        "description": "查询任务状态与结果",
+        "cli_template": "ac tasks get {task_id} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+        "params": {"task_id": {"type": "string"}},
+    },
+    {
+        "name": "tasks-run",
+        "description": "创建并执行任务。超时后用返回的 task_id 查询，不要再次创建",
+        "cli_template": "ac tasks run {agent_id} {prompt} --runtime {runtime} --format json",
+        "agent_safe": "write_with_confirm",
+        "interactive": False,
+        "timeout_sec": 600,
+        "side_effect": "write",
+        "params": {
+            "agent_id": {"type": "string"},
+            "prompt": {"type": "string"},
+            "runtime": {"type": "string", "enum": ["openclaw", "hermes"]},
+            "wait": {"type": "boolean", "default": False},
+        },
+    },
+    {
+        "name": "tasks-cancel",
+        "description": "取消任务",
+        "cli_template": "ac tasks cancel {task_id} --format json",
+        "agent_safe": "write_with_confirm",
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "write",
+    },
+    {
+        "name": "tasks-retry",
+        "description": "重试任务",
+        "cli_template": "ac tasks retry {task_id} --format json",
+        "agent_safe": "write_with_confirm",
+        "interactive": False,
+        "timeout_sec": 600,
+        "side_effect": "write",
+    },
+    {
+        "name": "tasks-watch",
+        "description": "订阅任务事件流",
+        "cli_template": "ac tasks watch {task_id}",
+        "agent_safe": "background_only",
+        "interactive": False,
+        "timeout_sec": 0,
+        "side_effect": "stream",
+    },
+    {
+        "name": "squads-list",
+        "description": "列出小队",
+        "cli_template": "ac squads list --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "squads-run",
+        "description": "向小队 leader 分配任务",
+        "cli_template": "ac squads run {squad_id} {prompt} --format json",
+        "agent_safe": "write_with_confirm",
+        "interactive": False,
+        "timeout_sec": 600,
+        "side_effect": "write",
+    },
+    {
+        "name": "skills",
+        "description": "技能目录",
+        "cli_template": "ac skills --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+    },
+    {
+        "name": "autopilots-list",
+        "description": "列出 Autopilot",
+        "cli_template": "ac autopilots list --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+    },
+    {
+        "name": "autopilots-create",
+        "description": "创建 Autopilot",
+        "cli_template": "ac autopilots create {name} {agent_id} {prompt} --cron {cron}",
+        "agent_safe": "write_with_confirm",
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "write",
+    },
+    {
+        "name": "autopilots-trigger",
+        "description": "立即触发 Autopilot",
+        "cli_template": "ac autopilots trigger {autopilot_id} --format json",
+        "agent_safe": "write_with_confirm",
+        "interactive": False,
+        "timeout_sec": 600,
+        "side_effect": "write",
+    },
+    {
+        "name": "autopilots-delete",
+        "description": "删除 Autopilot",
+        "cli_template": "ac autopilots delete {autopilot_id}",
+        "agent_safe": "write_with_confirm",
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "write",
+    },
+    {
+        "name": "workspaces",
+        "description": "列出工作区",
+        "cli_template": "ac workspaces --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "projects",
+        "description": "列出项目",
+        "cli_template": "ac projects --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "knowledge-status",
+        "description": "知识库状态",
+        "cli_template": "ac knowledge status --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "knowledge-search",
+        "description": "检索知识库。无命中退出码 2",
+        "cli_template": "ac knowledge search {q} --mode {mode} --limit {limit} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+        "params": {
+            "q": {"type": "string"},
+            "mode": {"type": "string", "enum": ["keyword", "vector", "hybrid"], "default": "hybrid"},
+            "limit": {"type": "integer", "default": 20, "minimum": 1, "maximum": 50},
+        },
+    },
+    {
+        "name": "outputs-status",
+        "description": "输出物库是否可读",
+        "cli_template": "ac outputs status --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "outputs-recent",
+        "description": "最近输出物",
+        "cli_template": "ac outputs recent --limit {limit} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+        "params": {"limit": {"type": "integer", "default": 20}},
+    },
+    {
+        "name": "system-status",
+        "description": "双运行时 Gateway、Cron、会话概况",
+        "cli_template": "ac system status --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+    },
+    {
+        "name": "system-alerts",
+        "description": "Cron 与 Gateway 告警",
+        "cli_template": "ac system alerts --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+    },
+    {
+        "name": "sessions-list",
+        "description": "列出会话",
+        "cli_template": "ac sessions list --limit {limit} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 30,
+        "side_effect": "read",
+    },
+    {
+        "name": "sessions-get",
+        "description": "会话详情",
+        "cli_template": "ac sessions get {session_id} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+        "params": {"session_id": {"type": "string"}},
+    },
+    {
+        "name": "fleet-nodes",
+        "description": "多端设备名册",
+        "cli_template": "ac fleet nodes --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "chain",
+        "description": "按任务、run 或 actor 查信息链",
+        "cli_template": "ac chain --task {task_id} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+        "params": {
+            "task_id": {"type": "string"},
+            "run_id": {"type": "string"},
+            "actor_id": {"type": "string"},
+        },
+    },
+    {
+        "name": "sops-list",
+        "description": "列出 SOP",
+        "cli_template": "ac sops list --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+    {
+        "name": "sops-get",
+        "description": "查看 SOP",
+        "cli_template": "ac sops get {sop_id} --format json",
+        "agent_safe": True,
+        "interactive": False,
+        "timeout_sec": 15,
+        "side_effect": "read",
+    },
+]
+
+
+def capabilities_payload() -> dict[str, Any]:
+    return {"items": COMMANDS, "total": len(COMMANDS), "exit_codes": EXIT_CODES}
+
+
+_NO_DATA = {
+    "knowledge-search",
+    "chain",
+    "agents-get",
+    "tasks-get",
+    "sessions-get",
+    "sops-get",
+}
+
+
+def manifest_document() -> dict[str, Any]:
+    from app.cli import __version__
+
+    commands: list[dict[str, Any]] = []
+    for cmd in COMMANDS:
+        item = dict(cmd)
+        codes = {"0": "success", "1": "error", "3": "upstream"}
+        if cmd["name"] in _NO_DATA:
+            codes["2"] = "no_data"
+        item["exit_codes"] = codes
+        commands.append(item)
+    return {
+        "$schema": "https://compo.dev/schemas/cli-agent-manifest/v1",
+        "name": "ac",
+        "version": __version__,
+        "cli": {
+            "command": "ac",
+            "install": "./scripts/ac --version",
+            "verify": "./scripts/verify.sh",
+        },
+        "commands": commands,
+        "exit_codes": EXIT_CODES,
+    }

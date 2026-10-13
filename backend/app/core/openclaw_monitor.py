@@ -8,6 +8,7 @@ import os
 import re
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -110,6 +111,38 @@ def _format_schedule(sched: dict[str, Any] | None) -> str:
     return str(sched)
 
 
+def _openclaw_env() -> dict[str, str]:
+    """Prefer ~/.npm-global/bin so sessions use the same CLI as health checks.
+
+    The desktop PATH often hits Homebrew OpenClaw first. That older binary
+    rejects the current config and prints no JSON, so the sessions page
+    only showed Hermes.
+    """
+    env = os.environ.copy()
+    extras = [
+        str(Path.home() / ".npm-global" / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        str(Path.home() / ".local" / "bin"),
+    ]
+    env["PATH"] = ":".join(extras + [env.get("PATH", "")])
+    env.setdefault("CI", "1")
+    env.setdefault("NO_COLOR", "1")
+    return env
+
+
+def _extract_json_object(raw: str) -> dict[str, Any] | None:
+    text = (raw or "").strip()
+    start = text.find("{")
+    if start < 0:
+        return None
+    try:
+        obj, _ = json.JSONDecoder().raw_decode(text[start:])
+    except json.JSONDecodeError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
 class OpenClawMonitor:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -118,12 +151,13 @@ class OpenClawMonitor:
         self._cache_at: float = 0
 
     async def _run_cmd(self, *args: str, timeout: float = 30) -> tuple[int, str, str]:
-        logger.debug("openclaw monitor cmd: %s %s", self.executable, " ".join(args))
+        logger.info("openclaw monitor cmd: %s %s", self.executable, " ".join(args))
         proc = await asyncio.create_subprocess_exec(
             self.executable,
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=_openclaw_env(),
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -198,8 +232,16 @@ class OpenClawMonitor:
 
         jobs: list[CronJobInfo] = []
         try:
-            _, out, _ = await self._run_cmd("cron", "list", "--json", timeout=30)
-            data = json.loads(out)
+            code, out, err = await self._run_cmd("cron", "list", "--json", timeout=30)
+            data = _extract_json_object(out)
+            if data is None:
+                logger.error(
+                    "cron list unparsed exit=%s stdout_len=%d stderr_head=%r",
+                    code,
+                    len(out or ""),
+                    (err or "")[:300],
+                )
+                return jobs
             for j in data.get("jobs", []):
                 state = j.get("state", {}) or {}
                 jobs.append(
@@ -217,6 +259,7 @@ class OpenClawMonitor:
                         runtime="openclaw",
                     )
                 )
+            logger.info("openclaw cron listed jobs=%d exit=%s", len(jobs), code)
         except Exception as e:
             logger.error("cron list failed: %s", e)
         return jobs
@@ -225,16 +268,24 @@ class OpenClawMonitor:
         sessions: list[SessionInfo] = []
         total = 0
         try:
-            _, out, _ = await self._run_cmd(
+            code, out, err = await self._run_cmd(
                 "sessions",
                 "list",
                 "--json",
                 "--all-agents",
                 "--limit",
                 str(limit),
-                timeout=30,
+                timeout=60,
             )
-            data = json.loads(out)
+            data = _extract_json_object(out)
+            if data is None:
+                logger.error(
+                    "sessions list unparsed exit=%s stdout_len=%d stderr_head=%r",
+                    code,
+                    len(out or ""),
+                    (err or "")[:300],
+                )
+                return sessions, total
             total = int(data.get("totalCount") or data.get("count") or 0)
             for s in data.get("sessions", []):
                 sessions.append(
@@ -250,6 +301,13 @@ class OpenClawMonitor:
                         runtime="openclaw",
                     )
                 )
+            logger.info(
+                "openclaw sessions listed count=%d total=%d limit=%d exit=%s",
+                len(sessions),
+                total,
+                limit,
+                code,
+            )
         except Exception as e:
             logger.error("sessions list failed: %s", e)
         return sessions, total

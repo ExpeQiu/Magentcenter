@@ -280,6 +280,64 @@ class DeviceTaskResponse(BaseModel):
     reply: str
 
 
+class SopStepInfo(BaseModel):
+    id: str
+    sop_id: str
+    position: int = 0
+    title: str
+    instruction: str = ""
+    skill_name: str = ""
+
+
+class SopInfo(BaseModel):
+    id: str
+    workspace_id: str = ""
+    name: str
+    description: str = ""
+    step_count: int = 0
+    run_count: int = 0
+    steps: list[SopStepInfo] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateSopRequest(BaseModel):
+    name: str
+    description: str = ""
+    workspace_id: str = ""
+
+
+class UpdateSopRequest(BaseModel):
+    name: str | None = None
+    description: str | None = None
+
+
+class CreateSopStepRequest(BaseModel):
+    title: str
+    instruction: str = ""
+    skill_name: str = ""
+
+
+class UpdateSopStepRequest(BaseModel):
+    title: str | None = None
+    instruction: str | None = None
+    skill_name: str | None = None
+
+
+class ReorderSopStepsRequest(BaseModel):
+    step_ids: list[str]
+
+
+class RunSopRequest(BaseModel):
+    agent_id: str
+    runtime: Literal["openclaw", "hermes"] | None = None
+
+
+class SopRunResult(BaseModel):
+    sop_id: str
+    task_ids: list[str]
+
+
 class ChainEvent(BaseModel):
     id: int
     kind: str

@@ -21,14 +21,56 @@ type AuditMap = Record<string, AuditRecord>;
 
 const AUDIT_STORAGE_KEY = "agentcenter.skill-audits";
 type SkillRuntime = "openclaw" | "hermes" | "catalog";
-const CATALOG_CATEGORIES = [
-  "engineering",
-  "productivity",
-  "research",
-  "domain",
-  "misc",
-  "in-progress",
+
+/** 与 WaytoAI/skills 顶层目录一致。 */
+const CATALOG_GROUPS: { id: string; title: string; hint: string }[] = [
+  { id: "engineering", title: "工程", hint: "Agent 运行时 / 部署" },
+  { id: "productivity", title: "协作", hint: "文档 / 记忆" },
+  { id: "research", title: "搜索", hint: "抓取 / 情报" },
+  { id: "domain", title: "业务", hint: "飞书 / 股票 / 内容" },
+  { id: "misc", title: "其它", hint: "" },
+  { id: "in-progress", title: "未完成", hint: "" },
+  { id: "deprecated", title: "退役", hint: "" },
 ];
+
+interface SkillGroup {
+  id: string;
+  folder: string;
+  title: string;
+  hint: string;
+  items: SkillInfo[];
+}
+
+function groupSkills(skills: SkillInfo[]): SkillGroup[] {
+  const byId = new Map<string, SkillInfo[]>();
+  for (const skill of skills) {
+    const key = skill.category || "";
+    const list = byId.get(key);
+    if (list) list.push(skill);
+    else byId.set(key, [skill]);
+  }
+  const known = new Set(CATALOG_GROUPS.map((group) => group.id));
+  const sections: SkillGroup[] = CATALOG_GROUPS.filter(
+    (group) => (byId.get(group.id)?.length ?? 0) > 0
+  ).map((group) => ({
+    id: group.id,
+    folder: group.id,
+    title: group.title,
+    hint: group.hint,
+    items: byId.get(group.id) ?? [],
+  }));
+  const rest = [...byId.keys()].filter((key) => !known.has(key)).sort((a, b) => a.localeCompare(b));
+  for (const key of rest) {
+    sections.push({
+      id: key || "ungrouped",
+      folder: key || "未归类",
+      title: key ? key : "不在 WaytoAI/skills 目录",
+      hint: "",
+      items: byId.get(key) ?? [],
+    });
+  }
+  return sections;
+}
 
 function loadAudits(): AuditMap {
   if (typeof window === "undefined") return {};
@@ -257,6 +299,8 @@ export function SkillsPage() {
     });
   }, [skills, filter, ownerFilter, modeFilter, runtimeFilter, categoryFilter]);
 
+  const grouped = useMemo(() => groupSkills(filtered), [filtered]);
+
   const install = async (e: React.FormEvent) => {
     e.preventDefault();
     setActionBusy("install");
@@ -370,10 +414,10 @@ export function SkillsPage() {
               onChange={(e) => setCategoryFilter(e.target.value)}
               className="rounded-lg border border-slate-700 bg-slate-800 px-2 py-1.5 text-sm"
             >
-              <option value="all">全部分类</option>
-              {CATALOG_CATEGORIES.map((name) => (
-                <option key={name} value={name}>
-                  {name}
+              <option value="all">全部分组</option>
+              {CATALOG_GROUPS.map((group) => (
+                <option key={group.id} value={group.id}>
+                  {group.id} · {group.title}
                 </option>
               ))}
             </select>
@@ -567,10 +611,36 @@ export function SkillsPage() {
       ) : filtered.length === 0 ? (
         <EmptyState title="未找到技能" description="调整筛选条件或刷新目录。已验证技能会出现在这里。" />
       ) : (
-        <div>
-          <h2 className="mb-2 text-sm font-medium text-slate-200">已安装 / 已验证</h2>
+        <div className="space-y-8">
+          {categoryFilter === "all" && grouped.length > 1 && (
+            <div className="flex flex-wrap gap-2">
+              {grouped.map((group) => (
+                <button
+                  key={group.id}
+                  type="button"
+                  onClick={() =>
+                    document
+                      .getElementById(`skill-group-${group.id}`)
+                      ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                  }
+                  className="rounded-full border border-slate-700 bg-slate-900/70 px-3 py-1 text-xs text-slate-300 hover:border-indigo-500/50"
+                >
+                  <span className="font-mono">{group.folder}</span>
+                  <span className="ml-1.5 text-slate-500">{group.items.length}</span>
+                </button>
+              ))}
+            </div>
+          )}
+          {grouped.map((group) => (
+          <section key={group.id} id={`skill-group-${group.id}`} className="scroll-mt-4">
+          <div className="mb-3 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <h2 className="font-mono text-sm font-medium text-slate-100">{group.folder}/</h2>
+            <span className="text-xs text-slate-400">{group.title}</span>
+            {group.hint ? <span className="text-xs text-slate-500">{group.hint}</span> : null}
+            <span className="text-xs text-slate-500">{group.items.length}</span>
+          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {filtered.map((s) => {
+          {group.items.map((s) => {
             const rt = (s.runtime || "openclaw") as SkillRuntime;
             const auditRec = audits[`${rt}:${s.id}`] || audits[s.id];
             return (
@@ -662,6 +732,8 @@ export function SkillsPage() {
             );
           })}
           </div>
+          </section>
+          ))}
         </div>
       )}
 

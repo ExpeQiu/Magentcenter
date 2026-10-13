@@ -40,8 +40,11 @@ class AgentCenterClient:
     ) -> Any:
         url = f"{self.base_url}{path}"
         logger.debug("%s %s params=%s", method, url, params)
-        with httpx.Client(timeout=self.timeout) as client:
-            resp = client.request(method, url, params=params, json=json_body)
+        try:
+            with httpx.Client(timeout=self.timeout) as client:
+                resp = client.request(method, url, params=params, json=json_body)
+        except httpx.HTTPError as exc:
+            raise ApiError(0, f"upstream unreachable: {exc}") from exc
         if resp.status_code >= 400:
             detail = resp.text
             try:
@@ -183,3 +186,82 @@ class AgentCenterClient:
     def list_projects(self, workspace_id: str | None = None) -> list[dict[str, Any]]:
         params = {"workspace_id": workspace_id} if workspace_id else None
         return self._request("GET", "/api/projects", params=params)
+
+    def knowledge_status(self) -> dict[str, Any]:
+        return self._request("GET", "/api/knowledge/status")
+
+    def knowledge_search(
+        self,
+        q: str,
+        *,
+        limit: int = 20,
+        mode: str = "hybrid",
+        runtime: str | None = None,
+        kind: str | None = None,
+        workspace_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"q": q, "limit": limit, "mode": mode}
+        if runtime:
+            params["runtime"] = runtime
+        if kind:
+            params["kind"] = kind
+        if workspace_id:
+            params["workspace_id"] = workspace_id
+        return self._request("GET", "/api/knowledge/search", params=params)
+
+    def outputs_status(self) -> dict[str, Any]:
+        return self._request("GET", "/api/outputs/status")
+
+    def outputs_recent(
+        self,
+        *,
+        limit: int = 20,
+        source: str | None = None,
+        q: str | None = None,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit}
+        if source:
+            params["source"] = source
+        if q:
+            params["q"] = q
+        return self._request("GET", "/api/outputs/recent", params=params)
+
+    def system_status(self, *, refresh: bool = False) -> dict[str, Any]:
+        return self._request("GET", "/api/system-status", params={"refresh": refresh})
+
+    def cron_alerts(self) -> dict[str, Any]:
+        return self._request("GET", "/api/cron-alerts")
+
+    def list_sessions(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        return self._request("GET", "/api/sessions", params={"limit": limit})
+
+    def get_session(self, session_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/api/sessions/{session_id}")
+
+    def list_fleet_nodes(self, workspace_id: str | None = None) -> list[dict[str, Any]]:
+        params = {"workspace_id": workspace_id} if workspace_id else None
+        return self._request("GET", "/api/fleet/nodes", params=params)
+
+    def list_chain(
+        self,
+        *,
+        task_id: str = "",
+        run_id: str = "",
+        actor_id: str = "",
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        params: dict[str, Any] = {"limit": limit}
+        if task_id:
+            params["task_id"] = task_id
+        if run_id:
+            params["run_id"] = run_id
+        if actor_id:
+            params["actor_id"] = actor_id
+        return self._request("GET", "/api/chain", params=params)
+
+    def list_sops(self, workspace_id: str | None = None) -> list[dict[str, Any]]:
+        params = {"workspace_id": workspace_id} if workspace_id else None
+        return self._request("GET", "/api/sops", params=params)
+
+    def get_sop(self, sop_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/api/sops/{sop_id}")

@@ -58,7 +58,7 @@ export function KnowledgePage({
         runtime: runtime === "all" ? undefined : runtime,
       });
       setHits(res);
-      setMsg(res.length ? `最近 ${res.length} 条` : "暂无知识条目，可点「从任务蒸馏」");
+      setMsg(res.length ? `最近 ${res.length} 条` : "暂无知识条目，可点「从任务与会话蒸馏」");
       console.info("[knowledge] list count=%d layer=%s", res.length, layer);
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);
@@ -115,13 +115,17 @@ export function KnowledgePage({
   };
 
   const backfill = async () => {
-    setMsg("蒸馏补索引中…");
+    setMsg("正在从任务和会话蒸馏…");
     try {
       const res = await api.knowledgeBackfill();
-      setMsg(`已从 ${res.indexed} 条任务蒸馏卡片`);
       const emb = res.embedding;
       if (emb) setProvider(`${emb.provider} / ${emb.model}`);
       await listRecent();
+      const s = res.sessions;
+      const sessionNote = s
+        ? `；会话扫描 ${s.scanned}，写入 ${s.written}（偏好 ${s.preferences} · 决策 ${s.decisions} · 步骤 ${s.procedural} · 教训 ${s.reflections}）`
+        : "";
+      setMsg(`任务 ${res.indexed} 条${sessionNote}`);
     } catch {
       setMsg("补索引失败");
     }
@@ -253,7 +257,7 @@ export function KnowledgePage({
               onClick={backfill}
               className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
             >
-              从任务蒸馏
+              从任务与会话蒸馏
             </button>
             <button
               onClick={() => void mineVault()}
@@ -376,7 +380,7 @@ export function KnowledgePage({
           }
           description={
             loadError ||
-            "任务完成后会自动蒸馏；也可点「从任务蒸馏」回填。有关键词时再检索。"
+            "任务完成后会自动蒸馏；也可点「从任务与会话蒸馏」回填。有关键词时再检索。"
           }
           action={
             <div className="flex gap-2">
@@ -392,7 +396,7 @@ export function KnowledgePage({
                 onClick={() => void backfill()}
                 className="rounded-lg border border-slate-600 px-3 py-1.5 text-sm text-slate-200 hover:bg-slate-800"
               >
-                从任务蒸馏
+                从任务与会话蒸馏
               </button>
             </div>
           }

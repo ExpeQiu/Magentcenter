@@ -16,6 +16,7 @@ from app.api import (
     orchestration,
     outputs,
     projects,
+    sops,
     super_ai,
     system,
     tasks,
@@ -139,6 +140,7 @@ def create_app() -> FastAPI:
     app.include_router(agents.router)
     app.include_router(workspaces.router)
     app.include_router(projects.router)
+    app.include_router(sops.router)
     app.include_router(tasks.router)
     app.include_router(tasks.live_tasks_router)
     app.include_router(orchestration.router)

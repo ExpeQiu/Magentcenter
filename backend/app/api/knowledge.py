@@ -21,6 +21,7 @@ from app.core.knowledge import (
     backfill_layers,
     upsert_artifact_ref,
 )
+from app.core.knowledge_session_mine import mine_recent_sessions
 from app.core.knowledge_vault_mine import mine_vault_docs
 from app.core.text_embed import embedder_status
 
@@ -191,12 +192,25 @@ async def knowledge_inject_preview(
 
 
 @router.post("/backfill")
-async def knowledge_backfill(limit: int = Query(200, ge=1, le=1000)):
+async def knowledge_backfill(
+    request: Request,
+    limit: int = Query(200, ge=1, le=1000),
+    sessions: int = Query(24, ge=0, le=80),
+):
+    """回填已完成任务，并从近期会话抽出偏好 / 决策 / 步骤 / 教训。"""
     n = await backfill_from_tasks(limit=limit)
     layers_filled = await backfill_layers()
+    mined = await mine_recent_sessions(request.app.state.monitor, limit=sessions)
+    logger.info(
+        "knowledge backfill tasks=%d sessions_scanned=%d sessions_written=%d",
+        n,
+        mined.get("scanned", 0),
+        mined.get("written", 0),
+    )
     return {
         "indexed": n,
         "layers_filled": layers_filled,
+        "sessions": mined,
         "status": "ok",
         "embedding": embedder_status(),
     }

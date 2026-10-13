@@ -12,10 +12,13 @@ if [[ -f "$ROOT/.env" ]]; then
   set +a
 fi
 
-if [[ -d "$BACKEND/.venv" ]]; then
-  # shellcheck disable=SC1091
-  source "$BACKEND/.venv/bin/activate"
+if [[ -x "$BACKEND/.venv/bin/python" ]]; then
+  PY="$BACKEND/.venv/bin/python"
+elif [[ -x "$BACKEND/.venv/bin/python3" ]]; then
+  PY="$BACKEND/.venv/bin/python3"
+else
+  PY="$(command -v python3)"
 fi
 
 cd "$BACKEND"
-exec python -m app.cli "$@"
+exec "$PY" -m app.cli "$@"

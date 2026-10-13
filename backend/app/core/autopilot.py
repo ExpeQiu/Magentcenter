@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 import re
@@ -16,6 +15,7 @@ from sqlalchemy import select
 
 from app.config import Settings
 from app.core.hermes_monitor import HermesMonitor
+from app.core.openclaw_monitor import _extract_json_object, _openclaw_env
 from app.core.task_manager import TaskManager
 from app.models.db import AutopilotRecord, get_session_factory
 from app.models.schemas import CreateTaskRequest, TaskInfo
@@ -60,11 +60,15 @@ class AutopilotManager:
         return env
 
     async def _run_cmd(self, *args: str, timeout: float = 30) -> tuple[int, str, str]:
+        env = _openclaw_env()
+        exe = shutil.which(self.executable, path=env.get("PATH")) or self.executable
+        logger.info("openclaw autopilot cmd exe=%s args=%s", exe, " ".join(args))
         proc = await asyncio.create_subprocess_exec(
-            self.executable,
+            exe,
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
+            env=env,
         )
         try:
             stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
@@ -180,8 +184,18 @@ class AutopilotManager:
         if "openclaw" not in self.settings.enabled_runtimes():
             return []
         try:
-            _, out, _ = await self._run_cmd("cron", "list", "--json", timeout=30)
-            data = json.loads(out)
+            code, out, err = await self._run_cmd("cron", "list", "--json", timeout=30)
+            data = _extract_json_object(out)
+            if data is None:
+                logger.error(
+                    "fetch openclaw cron unparsed exit=%s stdout_len=%d stderr_head=%r",
+                    code,
+                    len(out or ""),
+                    (err or "")[:300],
+                )
+                if strict:
+                    raise ValueError((err or out or "openclaw cron list returned no json")[:300])
+                return []
             items: list[AutopilotConfig] = []
             for j in data.get("jobs", []):
                 state = j.get("state", {}) or {}
@@ -202,6 +216,7 @@ class AutopilotManager:
                         schedule=schedule_str,
                     )
                 )
+            logger.info("fetch openclaw cron jobs=%d exit=%s", len(items), code)
             return items
         except Exception as e:
             logger.error("fetch openclaw cron failed: %s", e)
@@ -513,11 +528,16 @@ class AutopilotManager:
         code, out, err = await self._run_cmd(*args, timeout=30)
         if code != 0:
             raise ValueError(f"openclaw cron add failed: {err or out}")
-        try:
-            data = json.loads(out)
-            return data.get("id", "") or data.get("job", {}).get("id", "")
-        except json.JSONDecodeError:
+        data = _extract_json_object(out)
+        if not data:
+            logger.error(
+                "openclaw cron add unparsed exit=%s stderr_head=%r",
+                code,
+                (err or "")[:300],
+            )
             return ""
+        job = data.get("job") if isinstance(data.get("job"), dict) else {}
+        return str(data.get("id") or job.get("id") or "")
 
     @staticmethod
     def _to_hermes_schedule(cron: str) -> str:

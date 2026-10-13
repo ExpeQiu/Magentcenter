@@ -112,11 +112,12 @@ cp .env.example .env
 ./scripts/ac health
 ./scripts/ac agents list
 ./scripts/ac tasks run coder "写一个 hello world" --wait
-./scripts/ac tasks run default "ping" --runtime hermes --wait
 ./scripts/ac tasks list --status running
+./scripts/ac knowledge search "任务约定" --format json
+./scripts/ac --demo health --format json
 ```
 
-`--base-url` 或环境变量 `AGENTCENTER_URL`。`--json` 打原始输出。
+`--base-url` 或环境变量 `AGENTCENTER_URL`。`--json` 仍是接口原始 JSON。`--format json` 带 `module`、`data_source`、`request_id`、`items`。`--demo` 不访问协调器。退出码 `0` 成功、`1` 错误、`2` 无数据、`3` 协调器不可达。命令分级见 [SKILL.md](SKILL.md)。
 
 ## 生命周期
 

@@ -72,6 +72,40 @@ def test_scan_hides_underscore_dirs(tmp_path: Path):
     assert skills[0].description == "hello world"
 
 
+def test_symlink_groups_by_waytoai_directory(tmp_path: Path):
+    from app.core.skill_catalog import ALL_CATEGORIES
+    from app.core.skills import CATALOG_DIR_CATEGORIES
+
+    assert set(ALL_CATEGORIES) == set(CATALOG_DIR_CATEGORIES)
+    repo = tmp_path / "WaytoAI" / "skills"
+    weather = repo / "domain" / "weather"
+    weather.mkdir(parents=True)
+    (weather / "SKILL.md").write_text(
+        "---\nname: weather\ndescription: rain\n---\n",
+        encoding="utf-8",
+    )
+    persona = repo / "productivity" / "nuwa-skill" / "persona"
+    persona.mkdir(parents=True)
+    (persona / "SKILL.md").write_text(
+        "---\nname: persona\ndescription: think\n---\n",
+        encoding="utf-8",
+    )
+    link_root = tmp_path / "openclaw"
+    link_root.mkdir()
+    (link_root / "weather").symlink_to(weather, target_is_directory=True)
+    (link_root / "persona").symlink_to(persona, target_is_directory=True)
+    local = link_root / "local-only"
+    local.mkdir()
+    (local / "SKILL.md").write_text(
+        "---\nname: local-only\ndescription: here\n---\n",
+        encoding="utf-8",
+    )
+    by_id = {item.id: item.category for item in scan_skills(str(link_root))}
+    assert by_id["weather"] == "domain"
+    assert by_id["persona"] == "productivity"
+    assert by_id["local-only"] == ""
+
+
 def test_catalog_categories_are_initial_skills(tmp_path: Path):
     from app.core.skills import scan_all_skills
 

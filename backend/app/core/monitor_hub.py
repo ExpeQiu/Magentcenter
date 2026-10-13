@@ -134,9 +134,36 @@ class MonitorHub:
         return status
 
     async def get_sessions(self, limit: int = 50) -> tuple[list[SessionInfo], int]:
-        status = await self.get_system_status()
-        items = status.sessions[:limit]
-        return items, status.sessions_count
+        """List sessions from each runtime. Do not reuse the 50-row status preview."""
+        enabled = self.settings.enabled_runtimes()
+        named: list[tuple[str, object]] = []
+        if "openclaw" in enabled:
+            named.append(("openclaw", self.openclaw.get_sessions(limit=limit)))
+        if "hermes" in enabled:
+            named.append(("hermes", self.hermes.get_sessions(limit=limit)))
+        if not named:
+            return [], 0
+
+        results = await asyncio.gather(*(c for _, c in named), return_exceptions=True)
+        sessions: list[SessionInfo] = []
+        total = 0
+        for (name, _), result in zip(named, results):
+            if isinstance(result, Exception):
+                logger.error("sessions %s failed: %s", name, result)
+                continue
+            items, count = result
+            logger.info(
+                "sessions fetched runtime=%s count=%d reported=%d limit=%d",
+                name,
+                len(items),
+                count,
+                limit,
+            )
+            sessions.extend(items)
+            total += count
+        if len(sessions) > limit:
+            sessions = sessions[:limit]
+        return sessions, total
 
     async def get_session_detail(self, session_id: str) -> SessionDetail | None:
         # Hermes session id 常见前缀；优先对应运行时，再交叉回退

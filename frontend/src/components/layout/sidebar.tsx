@@ -22,7 +22,7 @@ export function Sidebar({ healthLabel }: SidebarProps) {
     { href: "/", label: "超级AI", icon: "✦" },
     { href: wp.kanban(), label: "办公室", icon: "🏢" },
     { href: wp.tasks(), label: "任务", icon: "📋" },
-    { href: wp.projects(), label: "项目", icon: "📁" },
+    { href: wp.projects(), label: "SOP工作流", icon: "🔁" },
     { href: wp.agents(), label: "Agents", icon: "🤖" },
     { href: wp.squads(), label: "小队", icon: "👥" },
     { href: wp.autopilots(), label: "Autopilot", icon: "⏱" },

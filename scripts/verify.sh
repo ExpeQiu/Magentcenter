@@ -37,7 +37,11 @@ fi
 AC="$ROOT/scripts/ac"
 export AGENTCENTER_URL="$BASE_URL"
 
-check "健康检查" "'$AC' health | grep -q 'status=ok'"
+check "CLI 版本" "'$AC' --version | grep -q '^ac '"
+check "CLI 能力契约" "'$AC' -q capabilities --format json | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['module']=='capabilities' and d['count']>=1 and all('agent_safe' in c for c in d['items'])\""
+check "CLI demo 健康" "'$AC' -q --demo health --format json | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d['data_source']=='demo' and d['items']['status']=='ok'\""
+
+check "健康检查" "'$AC' -q health | grep -q 'status=ok'"
 
 check "Agent 列表" "'$AC' --json agents list | python3 -c \"import sys,json; d=json.load(sys.stdin); assert len(d)>=1\""
 
