@@ -49,6 +49,10 @@ done
 
 HOST="\${HOST:-127.0.0.1}"
 PORT="\${PORT:-$PORT}"
+export AGENTCENTER_DATA_DIR='$APP_SUPPORT/data'
+export AGENTCENTER_LOG_DIR='$LOG_DIR'
+export DATABASE_URL='sqlite+aiosqlite:///$APP_SUPPORT/data/agentcenter.db'
+mkdir -p "\$AGENTCENTER_DATA_DIR"
 
 log "exec uvicorn port=\$PORT"
 cd "\$ROOT/backend" || { log "ERROR: cd failed"; exit 78; }

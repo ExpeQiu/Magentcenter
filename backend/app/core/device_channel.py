@@ -63,6 +63,8 @@ async def device_turn(
     task_manager,
     monitor,
     channel: str = "voice",
+    confirmation_id: str = "",
+    session_id: str = "",
 ) -> SuperAiTurnResponse:
     rec = await _require_voice(token)
     channel = channel if channel in ("voice", "desktop") else "voice"
@@ -74,6 +76,9 @@ async def device_turn(
         registry=registry,
         task_manager=task_manager,
         monitor=monitor,
+        confirmation_id=confirmation_id,
+        session_id=session_id or rec.id,
+        subject_id=rec.id,
     )
     limit = _DESKTOP_LIMIT if channel == "desktop" else _VOICE_LIMIT
     result.reply = _clip_reply(result.reply, limit)
@@ -104,11 +109,27 @@ async def device_turn(
         result.task_id or "-",
         channel,
     )
+    if result.task_id:
+        from app.core.confirmations import bind_device_task
+
+        try:
+            await bind_device_task(rec.id, result.task_id, session_id or rec.id)
+        except RuntimeError:
+            logger.info("device task link skipped device=%s", rec.id)
     return result
 
 
 async def device_task(token: str, task_id: str, task_manager) -> dict:
     rec = await _require_voice(token)
+    from app.core.confirmations import device_can_read
+
+    try:
+        allowed = await device_can_read(rec.id, task_id)
+    except RuntimeError:
+        allowed = False
+    if not allowed:
+        logger.info("super_ai device task denied device=%s task_id=%s", rec.id, task_id)
+        raise DeviceAuthError("task is outside this device session")
     task = await task_manager.get_task(task_id)
     if task is None:
         logger.info("super_ai device task missing device=%s task_id=%s", rec.id, task_id)

@@ -87,6 +87,8 @@ async def device_say(
             task_manager=request.app.state.task_manager,
             monitor=request.app.state.monitor,
             channel=req.channel,
+            confirmation_id=req.confirmation_id,
+            session_id=req.session_id,
         )
     except DeviceAuthError as exc:
         raise HTTPException(status_code=401, detail=str(exc)) from exc

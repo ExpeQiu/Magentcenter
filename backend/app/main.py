@@ -3,8 +3,9 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import (
     agents,
@@ -20,6 +21,7 @@ from app.api import (
     super_ai,
     system,
     tasks,
+    v2,
     workspaces,
     ws,
 )
@@ -33,9 +35,9 @@ from app.core.cron_alerts import CronAlertWatcher
 from app.core.monitor_hub import MonitorHub
 from app.core.task_manager import TaskManager
 from app.logging_setup import setup_logging
-from app.models.db import create_tables, init_db
+from app.models.db import backfill_task_owners, create_tables, init_db
 from app.models.schemas import HealthResponse
-from app.paths import data_dir, log_dir
+from app.paths import data_dir, log_dir, resolve_database_url
 
 logger = logging.getLogger(__name__)
 
@@ -45,10 +47,27 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     setup_logging(settings.log_level, str(log_dir()))
 
+    from app.core.execution import recover
+    from app.core.identity import load_or_create_identity
+    from app.core.local_auth import ensure_local_session
+
+    ident = load_or_create_identity(settings.normalized_profile())
+    ensure_local_session()
     db_path = data_dir()
     db_path.mkdir(parents=True, exist_ok=True)
-    init_db(settings.database_url)
+    database_url = resolve_database_url(settings.database_url)
+    init_db(database_url)
     await create_tables()
+    await backfill_task_owners(ident.center_id)
+    recovered = await recover()
+    logger.info(
+        "autonomy ready profile=%s center_id=%s node_id=%s recovered=%s slots=%s",
+        settings.normalized_profile(),
+        ident.center_id,
+        ident.node_id,
+        recovered,
+        settings.execution_slots(),
+    )
     from app.core.alert_settings_store import (
         apply_alert_settings,
         ensure_profile,
@@ -89,6 +108,8 @@ async def lifespan(app: FastAPI):
     app.state.monitor = monitor
     app.state.alert_watcher = alert_watcher
     app.state.settings = settings
+    app.state.center_id = ident.center_id
+    app.state.node_id = ident.node_id
 
     health = await registry.check_all_health()
     logger.info(
@@ -119,6 +140,37 @@ def create_app() -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def local_session_guard(request: Request, call_next):
+        if not settings.local_auth_enabled:
+            return await call_next(request)
+        path = request.url.path
+        if request.method == "OPTIONS" or _session_public(path):
+            return await call_next(request)
+        if request.headers.get("x-node-token") or request.headers.get("x-device-token"):
+            return await call_next(request)
+        from app.core.local_auth import session_matches
+
+        presented = request.headers.get("x-agentcenter-session") or request.cookies.get("ac_session") or ""
+        if session_matches(presented):
+            return await call_next(request)
+        admin = (settings.admin_token or "").strip()
+        if admin and request.headers.get("x-admin-token") == admin:
+            return await call_next(request)
+        return JSONResponse({"detail": "local session required"}, status_code=401)
+
+    @app.get("/api/session/bootstrap")
+    async def bootstrap_session(request: Request):
+        host = request.client.host if request.client else ""
+        if host not in {"127.0.0.1", "::1"}:
+            return JSONResponse({"detail": "bootstrap is loopback only"}, status_code=403)
+        from app.core.local_auth import ensure_local_session
+
+        token = ensure_local_session()
+        response = JSONResponse({"token": token})
+        response.set_cookie("ac_session", token, httponly=True, samesite="lax", path="/")
+        return response
+
     @app.get("/api/health", response_model=HealthResponse)
     async def health():
         registry: AgentRegistry = app.state.registry
@@ -135,6 +187,9 @@ def create_app() -> FastAPI:
             runtimes=panes,
             default_runtime=settings.default_runtime,
             mock_mode=settings.ai_mock_mode,
+            deploy_profile=settings.normalized_profile(),
+            protocol_version=2,
+            center_id=app.state.center_id if hasattr(app.state, "center_id") else "",
         )
 
     app.include_router(agents.router)
@@ -152,6 +207,7 @@ def create_app() -> FastAPI:
     app.include_router(super_ai.router)
     app.include_router(chain.router)
     app.include_router(fleet.router)
+    app.include_router(v2.router)
     app.include_router(ws.router)
     from app.core.static_ui import mount_static_ui
 
@@ -160,3 +216,11 @@ def create_app() -> FastAPI:
 
 
 app = create_app()
+
+
+def _session_public(path: str) -> bool:
+    if path in {"/api/health", "/api/session/bootstrap", "/api/v2/openapi.json", "/api/v2/nodes/enroll"}:
+        return True
+    if not path.startswith("/api") and not path.startswith("/ws"):
+        return True
+    return False

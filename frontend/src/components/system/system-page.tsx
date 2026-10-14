@@ -201,18 +201,18 @@ export function SystemPage() {
                   <p className="mt-1 flex items-center gap-2 text-lg font-medium">
                     <span
                       className={`h-2.5 w-2.5 rounded-full ${
-                        rt.available && rt.gateway?.running
+                        rt.gateway?.running
                           ? "bg-emerald-400"
                           : rt.available
                             ? "bg-amber-400"
                             : "bg-red-400"
                       }`}
                     />
-                    {rt.available
-                      ? rt.gateway?.running
-                        ? "Gateway 运行中"
-                        : "CLI 可用"
-                      : "不可用"}
+                    {rt.gateway?.running
+                      ? "Gateway 运行中"
+                      : rt.available
+                        ? "CLI 可用"
+                        : "不可用"}
                   </p>
                   <p className="mt-2 text-xs text-slate-400">
                     v{rt.version || "—"}

@@ -47,6 +47,9 @@ class HealthResponse(BaseModel):
     runtimes: list[RuntimeHealth] = Field(default_factory=list)
     default_runtime: str = "openclaw"
     mock_mode: bool
+    deploy_profile: str = "full"
+    protocol_version: int = 2
+    center_id: str = ""
 
 
 class WorkspaceInfo(BaseModel):
@@ -168,6 +171,14 @@ class TaskInfo(BaseModel):
     start_date: str = ""
     due_date: str = ""
     node_id: str = ""
+    owner_center_id: str = ""
+    origin: str = "local"
+    visibility: str = "private"
+    lifecycle_status: str = ""
+    execution_status: str = ""
+    cancel_phase: str = ""
+    attention_required: bool = False
+    status_detail: str = ""
     created_at: datetime
     updated_at: datetime
 
@@ -180,6 +191,7 @@ class TaskListResponse(BaseModel):
 
 
 class TaskEvent(BaseModel):
+    id: int = 0
     type: str
     content: str = ""
     tool: str = ""
@@ -251,6 +263,7 @@ class SuperAiTurnResponse(BaseModel):
     pending: SuperAiPending | None = None
     task_id: str = ""
     task_status: str = ""
+    confirmation_id: str = ""
 
 
 class DeviceEnrollRequest(BaseModel):
@@ -271,6 +284,8 @@ class DeviceTurnRequest(BaseModel):
     workspace_slug: str = "cyber"
     pending: SuperAiPending | None = None
     channel: Literal["voice", "desktop"] = "voice"
+    confirmation_id: str = ""
+    session_id: str = ""
 
 
 class DeviceTaskResponse(BaseModel):

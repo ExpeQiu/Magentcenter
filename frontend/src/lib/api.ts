@@ -52,13 +52,33 @@ function errorMessageFromBody(text: string, status: number): string {
 }
 
 const REQUEST_TIMEOUT_MS = 20_000;
+let sessionToken = "";
+
+export async function ensureSession(): Promise<void> {
+  if (typeof window === "undefined" || sessionToken) return;
+  const cached = window.sessionStorage.getItem("ac_session");
+  if (cached) {
+    sessionToken = cached;
+    return;
+  }
+  const res = await fetch(`${API_BASE}/api/session/bootstrap`, { credentials: "include" });
+  if (!res.ok) return;
+  const data = (await res.json()) as { token?: string };
+  sessionToken = data.token || "";
+  if (sessionToken) window.sessionStorage.setItem("ac_session", sessionToken);
+}
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
+  await ensureSession();
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
   try {
+    const headers = new Headers(init?.headers);
+    if (sessionToken) headers.set("X-AgentCenter-Session", sessionToken);
     const res = await fetch(`${API_BASE}${url}`, {
       ...init,
+      headers,
+      credentials: "include",
       signal: init?.signal ?? ctrl.signal,
     });
     if (!res.ok) {

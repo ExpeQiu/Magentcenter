@@ -214,6 +214,9 @@ async def handle_turn(
     registry,
     task_manager,
     monitor,
+    confirmation_id: str = "",
+    session_id: str = "",
+    subject_id: str = "local",
 ) -> SuperAiTurnResponse:
     started = time.perf_counter()
     run_id = uuid.uuid4().hex[:12]
@@ -226,6 +229,17 @@ async def handle_turn(
 
     parsed = parse_turn(raw, pending, last_href, slug)
     try:
+        if confirmation_id and raw in _CONFIRM:
+            return await _commit_confirmation(
+                run_id,
+                confirmation_id,
+                slug,
+                task_manager,
+                started=started,
+                workspace=slug,
+                session_id=session_id,
+                subject_id=subject_id,
+            )
         if parsed.intent == "help":
             return _finish(run_id, "help", "", _HELP_REPLY, started=started, workspace=slug)
         if parsed.intent == "cancel":
@@ -250,7 +264,24 @@ async def handle_turn(
             )
         if parsed.intent == "create_task":
             return await _prepare_create(
-                run_id, parsed.query, registry, started=started, workspace=slug
+                run_id,
+                parsed.query,
+                registry,
+                started=started,
+                workspace=slug,
+                session_id=session_id,
+                subject_id=subject_id,
+            )
+        if confirmation_id and parsed.intent == "confirm_create":
+            return await _commit_confirmation(
+                run_id,
+                confirmation_id,
+                slug,
+                task_manager,
+                started=started,
+                workspace=slug,
+                session_id=session_id,
+                subject_id=subject_id,
             )
         if parsed.intent == "confirm_create" and pending:
             return await _commit_create(
@@ -298,7 +329,16 @@ async def handle_turn(
     )
 
 
-async def _prepare_create(run_id, prompt, registry, *, started, workspace):
+async def _prepare_create(
+    run_id,
+    prompt,
+    registry,
+    *,
+    started,
+    workspace,
+    session_id: str = "",
+    subject_id: str = "local",
+):
     body = (prompt or "").strip(" ：:，,。")
     if not body:
         return _finish(
@@ -326,15 +366,83 @@ async def _prepare_create(run_id, prompt, registry, *, started, workspace):
         agent_name=agent.name or agent.id,
         runtime=agent.runtime,
     )
-    return _finish(
+    finished = _finish(
         run_id,
         "create_task",
         "tasks",
-        f"将用「{pending.agent_name}」新建任务：{body}。回复「确认」后执行。",
+        f"将用「{pending.agent_name}」新建任务：{body}。回复「确认」后执行。目标在本机，未授权的正文不会上传。",
         pending=pending,
         started=started,
         workspace=workspace,
     )
+    try:
+        from app.core.confirmations import issue_confirmation
+
+        finished.confirmation_id = await issue_confirmation(
+            subject_id=subject_id or "local",
+            session_id=session_id or run_id,
+            summary=body,
+            target={
+                "agent_id": pending.agent_id,
+                "agent_name": pending.agent_name,
+                "prompt": pending.prompt,
+                "runtime": pending.runtime,
+                "workspace_id": workspace,
+            },
+            scope="local",
+        )
+    except Exception:
+        logger.info("confirmation skipped run_id=%s", run_id)
+    return finished
+
+
+async def _commit_confirmation(
+    run_id,
+    confirmation_id,
+    slug,
+    task_manager,
+    *,
+    started,
+    workspace,
+    session_id: str,
+    subject_id: str,
+):
+    from app.core.confirmations import ConfirmationError, attach_task, confirm
+
+    try:
+        opened = await confirm(
+            confirmation_id,
+            subject_id=subject_id,
+            session_id=session_id,
+        )
+    except ConfirmationError as exc:
+        return _finish(run_id, "confirm_create", "tasks", str(exc), started=started, workspace=workspace)
+    if opened.get("task_id"):
+        return _finish(
+            run_id,
+            "confirm_create",
+            "tasks",
+            "确认过了，还是原来的任务。",
+            task_id=opened["task_id"],
+            task_status="queued",
+            started=started,
+            workspace=workspace,
+        )
+    target = opened.get("target") or {}
+    pending = SuperAiPending(
+        action="create_task",
+        prompt=target.get("prompt") or opened.get("summary") or "",
+        agent_id=target.get("agent_id") or "",
+        agent_name=target.get("agent_name") or "",
+        runtime=target.get("runtime") or "openclaw",
+    )
+    result = await _commit_create(
+        run_id, pending, slug, task_manager, started=started, workspace=workspace
+    )
+    if result.task_id:
+        await attach_task(confirmation_id, result.task_id)
+    result.confirmation_id = confirmation_id
+    return result
 
 
 async def _commit_create(run_id, pending: SuperAiPending, slug, task_manager, *, started, workspace):

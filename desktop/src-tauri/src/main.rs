@@ -1,4 +1,4 @@
-//! AgentCenter 桌面壳：原生窗口 + FastAPI sidecar。关窗即停 API。
+//! AgentCenter 桌面壳。窗口关闭不停止后台节点服务。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -66,6 +66,24 @@ fn api_ok() -> bool {
         .ok()
         .map(|r| (200..400).contains(&r.status()))
         .unwrap_or(false)
+}
+
+fn warn_protocol(app: &AppHandle) {
+    let Ok(response) = ureq::get(API_HEALTH).timeout(Duration::from_secs(2)).call() else {
+        return;
+    };
+    let Ok(body) = response.into_string() else {
+        return;
+    };
+    if body.contains("\"protocol_version\":2") || body.contains("\"protocol_version\": 2") {
+        return;
+    }
+    if body.contains("protocol_version") {
+        set_status(
+            app,
+            "节点协议版本不兼容，请升级节点服务。关闭窗口不会停止正在运行的任务。",
+        );
+    }
 }
 
 fn runtime_root(app: &AppHandle) -> PathBuf {
@@ -257,7 +275,8 @@ fn boot(app: AppHandle) {
 
     if api_ok() {
         desktop_log("reuse existing api");
-        set_status(&app, "检测到已运行的 API，正在打开控制台…");
+        warn_protocol(&app);
+        set_status(&app, "检测到已运行的节点服务，正在打开控制台。关闭窗口不会停止任务。");
         navigate_home(&app);
         return;
     }
@@ -280,6 +299,7 @@ fn boot(app: AppHandle) {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(90) {
         if api_ok() {
+            warn_protocol(&app);
             navigate_home(&app);
             return;
         }
@@ -292,8 +312,16 @@ fn boot(app: AppHandle) {
     );
 }
 
+#[tauri::command]
+fn stop_node_service() -> String {
+    desktop_log("explicit stop node service");
+    stop_backend();
+    "stopped".to_string()
+}
+
 fn main() {
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![stop_node_service])
         .setup(|app| {
             let handle = app.handle().clone();
             thread::spawn(move || boot(handle));
@@ -303,7 +331,7 @@ fn main() {
         .expect("error while building AgentCenter")
         .run(|_app, event| {
             if matches!(event, RunEvent::Exit | RunEvent::ExitRequested { .. }) {
-                stop_backend();
+                desktop_log("window closed; node service keeps running");
             }
         });
 }

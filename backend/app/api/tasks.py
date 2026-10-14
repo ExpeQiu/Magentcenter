@@ -126,14 +126,18 @@ async def update_task(
 
 
 @router.get("/{task_id}/stream")
-async def stream_task_events(task_id: str, request: Request):
+async def stream_task_events(
+    task_id: str,
+    request: Request,
+    after: int = Query(0, ge=0),
+):
     tm = request.app.state.task_manager
     task = await tm.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail=f"task not found: {task_id}")
 
     async def event_generator():
-        async for ev in tm.stream_events(task_id):
+        async for ev in tm.stream_events(task_id, after_id=after):
             if ev.type == "heartbeat":
                 yield {"event": "heartbeat", "data": "ping"}
             else:

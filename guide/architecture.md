@@ -179,3 +179,10 @@ fleet-edge（plugin / webhook）
 ### 信息链
 
 跨设备的经过记在 `chain_events`，用 `GET /api/chain?task_id=` 按时间读出。登记、每一轮超级AI对话、调用方、派发、webhook 推送结果、领取、执行结束、设备取回最终结果，各是一行。确认建任务时，会把同一设备上一条「建任务」对话补上同一个 `task_id`。正文会脱敏并截断。令牌不入库。心跳只更新名册的 `last_seen`，不逐条进信息链。日志键：`chain kind=… run_id=… task_id=… actor=… target=… intent=… status=…`。
+
+## 多端自治
+
+部署 profile 为 `cloud`、`full`、`edge`。本机身份在数据目录的 `node_identity.json`，不使用主机名。任务归属在 `owner_center_id`。一次运行写在 `executions`，跨端子步骤写在 `delegations`，可靠消息走 `inbox` / `outbox`。
+
+v1 任务状态仍是 `queued` / `running` / `completed` / `failed` / `cancelled`。需要核实的执行用 `lifecycle_status=needs_attention`，界面显示「待核实」。协议契约在 `GET /api/v2/openapi.json`。本地接口要带 `X-AgentCenter-Session`，令牌在数据目录，不放进 URL。关窗不停止节点服务；停止用 `scripts/stop.sh` 或桌面的 `stop_node_service`。
+

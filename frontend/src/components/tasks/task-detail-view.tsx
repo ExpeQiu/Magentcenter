@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { API_BASE, api } from "@/lib/api";
+import { API_BASE, api, ensureSession } from "@/lib/api";
 import { useWorkspacePaths } from "@/lib/context/workspace-context";
 import type { StreamEvent, TaskInfo } from "@/lib/types";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -29,22 +29,35 @@ export function TaskDetailView() {
 
   useEffect(() => {
     if (!taskId) return;
-    const es = new EventSource(`${API_BASE}/api/tasks/${encodeURIComponent(taskId)}/stream`);
+    let closed = false;
+    let es: EventSource | null = null;
     const handler = (type: string) => (e: MessageEvent) => {
       try {
         const data = JSON.parse(e.data) as StreamEvent;
         data.type = type;
-        setEvents((prev) => [...prev, data]);
+        setEvents((prev) => {
+          if (data.id && prev.some((item) => item.id === data.id)) return prev;
+          return [...prev, data];
+        });
         if (type === "result") api.task(taskId).then(setTask);
       } catch {}
     };
-    es.addEventListener("text", handler("text"));
-    es.addEventListener("tool_use", handler("tool_use"));
-    es.addEventListener("tool_result", handler("tool_result"));
-    es.addEventListener("status", handler("status"));
-    es.addEventListener("error", handler("error"));
-    es.addEventListener("result", handler("result"));
-    return () => es.close();
+    ensureSession().then(() => {
+      if (closed) return;
+      es = new EventSource(`${API_BASE}/api/tasks/${encodeURIComponent(taskId)}/stream`, {
+        withCredentials: true,
+      });
+      es.addEventListener("text", handler("text"));
+      es.addEventListener("tool_use", handler("tool_use"));
+      es.addEventListener("tool_result", handler("tool_result"));
+      es.addEventListener("status", handler("status"));
+      es.addEventListener("error", handler("error"));
+      es.addEventListener("result", handler("result"));
+    });
+    return () => {
+      closed = true;
+      es?.close();
+    };
   }, [taskId]);
 
   useEffect(() => {
@@ -92,6 +105,21 @@ export function TaskDetailView() {
               </span>
             )}
             <StatusBadge status={task.status} />
+            {task.attention_required && (
+              <span className="text-amber-300">待核实</span>
+            )}
+            {task.cancel_phase === "requested" && (
+              <span className="text-amber-300">请求取消</span>
+            )}
+            {task.cancel_phase === "stopping" && (
+              <span className="text-amber-300">正在停止</span>
+            )}
+            {task.owner_center_id && (
+              <span>
+                中心: <code className="text-slate-200">{task.owner_center_id.slice(0, 8)}</code>
+              </span>
+            )}
+            <span>{task.node_id ? `执行位置: ${task.node_id}` : "执行位置: 本机"}</span>
             {task.duration_ms > 0 && <span>{task.duration_ms}ms</span>}
           </div>
         </div>

@@ -17,6 +17,17 @@ from app.models.schemas import AgentInfo
 logger = logging.getLogger(__name__)
 
 SESSION_ID_RE = re.compile(r"^session_id:\s*(\S+)\s*$", re.M)
+_VERSION_TAG_RE = re.compile(r"\bv(\d+\.\d+\.\d+)\b")
+_VERSION_PLAIN_RE = re.compile(r"\b(\d+\.\d+\.\d+)\b")
+
+
+def parse_hermes_version(text: str) -> str:
+    """Read a Hermes CLI version. Prefer an explicit vX.Y.Z tag."""
+    tagged = _VERSION_TAG_RE.search(text or "")
+    if tagged:
+        return tagged.group(1)
+    plain = _VERSION_PLAIN_RE.search(text or "")
+    return plain.group(1) if plain else ""
 PROFILE_ROW_RE = re.compile(
     r"^[◆*\s]*([A-Za-z0-9_.-]+)\s+(\S+)\s+(\S+)(?:\s+(\S+))?",
     re.M,
@@ -116,15 +127,13 @@ class HermesAdapter:
         if not self.is_available():
             return False, ""
         try:
-            code, out, err = await self._run_cmd("version", timeout=15)
-            text = out or err
-            version = ""
-            m = re.search(r"v?(\d+\.\d+\.\d+)", text)
-            if m:
-                version = m.group(1)
-            elif "Hermes" in text:
-                version = text.strip().splitlines()[0][:64]
-            return code == 0 or bool(version), version
+            # Current CLI exposes the version as a flag. `hermes version`
+            # is rejected and used to mark a live gateway unavailable.
+            code, out, err = await self._run_cmd("--version", timeout=30)
+            version = parse_hermes_version(f"{out}\n{err}")
+            ok = code == 0 and bool(version)
+            logger.info("hermes health ok=%s version=%s exit=%s", ok, version or "-", code)
+            return ok, version
         except Exception as e:
             logger.error("hermes health check failed: %s", e)
             return False, ""

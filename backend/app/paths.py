@@ -42,14 +42,30 @@ def guide_dir() -> Path:
     return repo_root() / "guide"
 
 
+def _default_data_dir() -> Path:
+    root = repo_root()
+    text = str(root)
+    # 正在使用的数据库不放进 iCloud 或外置盘仓库目录。
+    if "Mobile Documents" in text or text.startswith("/Volumes/"):
+        return Path.home() / "Library" / "Application Support" / "AgentCenter" / "data"
+    return root / "backend" / "data"
+
+
 def data_dir() -> Path:
     override = os.environ.get("AGENTCENTER_DATA_DIR")
     if override:
         path = Path(override)
     else:
-        path = repo_root() / "backend" / "data"
+        path = _default_data_dir()
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def resolve_database_url(configured: str) -> str:
+    """相对 SQLite 路径跟数据目录走，避免库文件留在仓库里。"""
+    if ":///./" in (configured or ""):
+        return "sqlite+aiosqlite:///" + str(data_dir() / "agentcenter.db")
+    return configured
 
 
 def log_dir() -> Path:

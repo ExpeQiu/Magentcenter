@@ -21,6 +21,8 @@ const char *WORKSPACE = "cyber";
 
 Preferences prefs;
 String deviceToken;
+String sessionId;
+String confirmationId;
 String pendingAction;
 String pendingPrompt;
 String pendingAgent;
@@ -39,7 +41,7 @@ bool postJson(const String &path, const String &body, String &response) {
   response = http.getString();
   http.end();
   if (code < 200 || code >= 300) {
-    Serial.printf("HTTP %d %s\n", code, response.c_str());
+    Serial.printf("请求失败 HTTP %d。检查云端地址、令牌，或云端是否不可用。\n", code);
     return false;
   }
   return true;
@@ -103,6 +105,12 @@ void say(const String &text) {
   JsonDocument doc;
   doc["text"] = text;
   doc["workspace_slug"] = WORKSPACE;
+  if (sessionId.length()) {
+    doc["session_id"] = sessionId;
+  }
+  if (confirmationId.length()) {
+    doc["confirmation_id"] = confirmationId;
+  }
   if (pendingAction.length()) {
     JsonObject pending = doc["pending"].to<JsonObject>();
     pending["action"] = pendingAction;
@@ -124,6 +132,7 @@ void say(const String &text) {
   }
   const char *reply = res["reply"] | "";
   Serial.println(reply);
+  confirmationId = res["confirmation_id"].as<String>();
   JsonObject pending = res["pending"];
   if (!pending.isNull()) {
     pendingAction = pending["action"].as<String>();
@@ -133,6 +142,7 @@ void say(const String &text) {
     pendingRuntime = pending["runtime"].as<String>();
   } else {
     pendingAction = "";
+    confirmationId = "";
   }
   const char *taskId = res["task_id"] | "";
   if (taskId[0]) {
@@ -144,6 +154,11 @@ void setup() {
   Serial.begin(115200);
   prefs.begin("super-ai", false);
   deviceToken = prefs.getString("token", "");
+  sessionId = prefs.getString("session", "");
+  if (!sessionId.length()) {
+    sessionId = String(DEVICE_ID) + "-session";
+    prefs.putString("session", sessionId);
+  }
   WiFi.begin(WIFI_SSID, WIFI_PASS);
   Serial.print("wifi");
   while (WiFi.status() != WL_CONNECTED) {

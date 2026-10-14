@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 from app.config import Settings
+from app.core.hermes_adapter import parse_hermes_version
 from app.core.openclaw_monitor import (
     CronJobInfo,
     GatewayStatus,
@@ -98,10 +99,10 @@ class HermesMonitor:
         if self.settings.ai_mock_mode:
             return "mock-0.17.0"
         try:
-            _, out, err = await self._run_cmd("version", timeout=15)
-            text = out or err
-            m = re.search(r"v?(\d+\.\d+\.\d+)", text)
-            return m.group(1) if m else text.strip().splitlines()[0][:64]
+            code, out, err = await self._run_cmd("--version", timeout=30)
+            version = parse_hermes_version(f"{out}\n{err}")
+            logger.info("hermes version probe version=%s exit=%s", version or "-", code)
+            return version
         except Exception:
             return ""
 

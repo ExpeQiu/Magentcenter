@@ -34,6 +34,27 @@ if ! curl -sf "$BASE_URL/api/health" > /dev/null 2>&1; then
   sleep 2
 fi
 
+load_ac_session() {
+  local app="${HOME}/Library/Application Support/AgentCenter/data/local_session.token"
+  local repo="$ROOT/backend/data/local_session.token"
+  local chosen=""
+  if [[ -n "${AGENTCENTER_DATA_DIR:-}" && -f "$AGENTCENTER_DATA_DIR/local_session.token" ]]; then
+    chosen="$AGENTCENTER_DATA_DIR/local_session.token"
+  elif [[ -f "$app" ]]; then
+    chosen="$app"
+  elif [[ -f "$repo" ]]; then
+    chosen="$repo"
+  fi
+  if [[ -n "$chosen" ]]; then
+    AC_SESSION=$(tr -d '[:space:]' < "$chosen")
+    export AGENTCENTER_SESSION="$AC_SESSION"
+  fi
+}
+load_ac_session
+if [[ -n "${AC_SESSION:-}" ]]; then
+  curl() { command curl -H "X-AgentCenter-Session: $AC_SESSION" "$@"; }
+fi
+
 AC="$ROOT/scripts/ac"
 export AGENTCENTER_URL="$BASE_URL"
 

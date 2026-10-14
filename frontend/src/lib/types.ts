@@ -45,6 +45,14 @@ export interface TaskInfo {
   start_date: string;
   due_date: string;
   node_id?: string;
+  owner_center_id?: string;
+  origin?: string;
+  visibility?: string;
+  lifecycle_status?: string;
+  execution_status?: string;
+  cancel_phase?: string;
+  attention_required?: boolean;
+  status_detail?: string;
   created_at: string;
   updated_at: string;
 }
@@ -85,6 +93,8 @@ export interface FleetNode {
   capabilities?: string[];
   handshake?: "" | "pending" | "ok" | "failed" | string;
   handshake_at?: string | null;
+  self?: boolean;
+  addresses?: string[];
 }
 
 export interface FleetPeer {
@@ -491,6 +501,7 @@ export interface StreamEvent {
   output?: string;
   status?: string;
   timestamp?: string;
+  id?: number;
 }
 
 export type TaskViewMode = "list" | "board" | "gantt";

@@ -30,7 +30,8 @@ class TaskManager:
         self._cancel_flags: dict[str, bool] = {}
         self._event_queues: dict[str, asyncio.Queue[TaskEvent]] = defaultdict(asyncio.Queue)
         self._agent_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
-        self._semaphore = asyncio.Semaphore(settings.max_concurrent_tasks)
+        slots = settings.execution_slots() or settings.max_concurrent_tasks
+        self._semaphore = asyncio.Semaphore(max(1, slots))
 
     def _record_to_info(self, rec: TaskRecord) -> TaskInfo:
         usage = None
@@ -57,6 +58,18 @@ class TaskManager:
             start_date=rec.start_date or "",
             due_date=rec.due_date or "",
             node_id=getattr(rec, "node_id", "") or "",
+            owner_center_id=getattr(rec, "owner_center_id", "") or "",
+            origin=getattr(rec, "origin", "") or "local",
+            visibility=getattr(rec, "visibility", "") or "private",
+            lifecycle_status=getattr(rec, "lifecycle_status", "") or "",
+            attention_required=(getattr(rec, "lifecycle_status", "") or "") == "needs_attention",
+            cancel_phase=(
+                "stopped"
+                if rec.status == "cancelled"
+                else "requested"
+                if getattr(rec, "cancel_requested_at", None)
+                else ""
+            ),
             created_at=rec.created_at,
             updated_at=rec.updated_at,
         )
@@ -102,6 +115,13 @@ class TaskManager:
         return rt
 
     async def create_task(self, req: CreateTaskRequest) -> TaskInfo:
+        from app.core.storage_guard import StorageError, ensure_capacity
+        from app.paths import data_dir
+
+        try:
+            ensure_capacity(data_dir(), self.settings.min_free_mb)
+        except StorageError as exc:
+            raise ValueError(str(exc)) from exc
         runtime = self._resolve_runtime(req)
         target = (req.node_id or "").strip()
         remote_node = ""
@@ -117,12 +137,16 @@ class TaskManager:
                 raise ValueError(str(e)) from e
             stamped_node = plan["node_id"]
             if plan["local"]:
+                if not self.settings.executors_enabled():
+                    raise ValueError("local executors are disabled on this profile")
                 agent = await self.registry.get_agent(req.agent_id, runtime=runtime)
                 if not agent:
                     raise ValueError(f"agent not found: {runtime}/{req.agent_id}")
             else:
                 remote_node = plan["node_id"]
         else:
+            if not self.settings.executors_enabled():
+                raise ValueError("local executors are disabled on this profile")
             agent = await self.registry.get_agent(req.agent_id, runtime=runtime)
             if not agent:
                 raise ValueError(f"agent not found: {runtime}/{req.agent_id}")
@@ -221,6 +245,9 @@ class TaskManager:
             update={"system_prompt": system_prompt, "workspace_id": workspace_id}
         )  # type: ignore[arg-type]
 
+        from app.core.identity import load_or_create_identity
+
+        ident = load_or_create_identity(self.settings.normalized_profile())
         factory = get_session_factory()
         async with factory() as session:
             rec = TaskRecord(
@@ -236,6 +263,9 @@ class TaskManager:
                 start_date=req.start_date or "",
                 due_date=req.due_date or "",
                 node_id=stamped_node,
+                owner_center_id=ident.center_id,
+                origin="local",
+                visibility="private",
             )
             session.add(rec)
             await session.commit()
@@ -243,7 +273,7 @@ class TaskManager:
             info = self._record_to_info(rec)
 
         logger.info(
-            "task created id=%s runtime=%s agent=%s project=%s workspace=%s inject=%s gate=%s",
+            "task created id=%s runtime=%s agent=%s project=%s workspace=%s inject=%s gate=%s center_id=%s",
             task_id,
             runtime,
             req.agent_id,
@@ -251,6 +281,7 @@ class TaskManager:
             workspace_id or "-",
             want_inject,
             bool(gate_note),
+            ident.center_id,
         )
         if gate_note:
             await self._emit(
@@ -304,6 +335,7 @@ class TaskManager:
                 logger.warning("fleet notify failed task=%s node=%s: %s", task_id, remote_node, e)
             return info
         from app.core.chain import append_chain
+        from app.core.execution import open_local
 
         await append_chain(
             kind="dispatch",
@@ -313,6 +345,14 @@ class TaskManager:
             status="queued",
             summary=req.prompt,
             detail={"runtime": runtime, "agent_id": req.agent_id},
+        )
+        execution_id = await open_local(task_id, runtime, req.agent_id)
+        logger.info(
+            "local execution opened center_id=%s task_id=%s execution_id=%s attempt=%s",
+            ident.center_id,
+            task_id,
+            execution_id,
+            1,
         )
         asyncio.create_task(self._dispatch(task_id, req))
         return info
@@ -328,8 +368,17 @@ class TaskManager:
                 await self._run_task(task_id, req)
 
     async def _run_task(self, task_id: str, req: CreateTaskRequest) -> None:
+        from app.core.execution import ack_cancel, current_execution, mark
+
         self._cancel_flags[task_id] = False
+        execution = await current_execution(task_id)
+        execution_id = execution.id if execution else ""
+        if await self._cancel_requested(task_id):
+            await self._finish_cancelled(task_id, execution_id)
+            return
+        await mark(execution_id, "starting", handle_kind="async", handle_token=req.resume_session_id or "")
         await self._update_task(task_id, status="running")
+        await mark(execution_id, "running")
         await self._emit(task_id, TaskEvent(type="status", status="running"))
 
         runtime = req.runtime or self.settings.default_runtime
@@ -356,9 +405,10 @@ class TaskManager:
             )
 
             async for raw_event in event_iter:
-                if self._cancel_flags.get(task_id):
+                if await self._cancel_requested(task_id):
                     final_status = "cancelled"
                     final_error = "execution cancelled"
+                    await ack_cancel(execution_id)
                     await self._emit(
                         task_id, TaskEvent(type="error", content=final_error)
                     )
@@ -391,6 +441,13 @@ class TaskManager:
             await self._emit(task_id, TaskEvent(type="error", content=final_error))
 
         output_text = "".join(output_parts)
+        exec_status = {
+            "completed": "succeeded",
+            "cancelled": "stopped",
+            "failed": "failed",
+            "timeout": "interrupted",
+        }.get(final_status, "failed")
+        await mark(execution_id, exec_status, handle_kind="async", handle_token=session_id)
         await self._update_task(
             task_id,
             status=final_status,
@@ -582,23 +639,50 @@ class TaskManager:
                     }
             return list(stats_map.values())
 
+    async def _cancel_requested(self, task_id: str) -> bool:
+        if self._cancel_flags.get(task_id):
+            return True
+        from app.core.execution import cancel_requested
+
+        return await cancel_requested(task_id)
+
+    async def _finish_cancelled(self, task_id: str, execution_id: str) -> None:
+        from app.core.execution import ack_cancel, mark
+
+        await ack_cancel(execution_id)
+        await mark(execution_id, "stopped")
+        await self._update_task(task_id, status="cancelled", error="execution cancelled")
+        await self._emit(task_id, TaskEvent(type="status", status="cancelled", content="cancelled"))
+
     async def cancel_task(self, task_id: str) -> TaskInfo | None:
+        from app.core.execution import request_cancel
+
         task = await self.get_task(task_id)
         if not task:
             return None
-        if task.status == "queued" and (task.node_id or ""):
-            await self._update_task(task_id, status="cancelled", error="cancelled before claim")
+        if task.status in {"completed", "failed", "timeout"}:
+            task.status_detail = "already_finished"
+            logger.info("cancel kept finished task id=%s status=%s", task_id, task.status)
+            return task
+        if task.status == "cancelled":
+            return task
+        if task.status == "queued":
+            await self._update_task(task_id, status="cancelled", error="cancelled before start")
             await self._emit(
                 task_id,
                 TaskEvent(type="status", status="cancelled", content="cancelled"),
             )
-            logger.info("remote task cancelled before claim id=%s node=%s", task_id, task.node_id)
+            logger.info("task cancelled before start id=%s node=%s", task_id, task.node_id)
             return await self.get_task(task_id)
         if task.status != "running":
             raise ValueError(f"task {task_id} is not running (status={task.status})")
+        outcome = await request_cancel(task_id)
         self._cancel_flags[task_id] = True
-        logger.info("task cancel requested id=%s", task_id)
-        return task
+        logger.info("task cancel requested id=%s outcome=%s", task_id, outcome)
+        updated = await self.get_task(task_id)
+        if updated and outcome == "already_finished":
+            updated.status_detail = "already_finished"
+        return updated
 
     async def retry_task(self, task_id: str) -> TaskInfo:
         task = await self.get_task(task_id)
@@ -657,6 +741,7 @@ class TaskManager:
             for r in rows:
                 events.append(
                     TaskEvent(
+                        id=r.id,
                         type=r.event_type,
                         content=r.content or "",
                         tool=r.tool or "",
@@ -669,37 +754,26 @@ class TaskManager:
     def subscribe(self, task_id: str) -> asyncio.Queue[TaskEvent]:
         return self._event_queues[task_id]
 
-    async def stream_events(self, task_id: str):
-        """SSE 生成器：先回放历史，再实时推送。"""
-        history = await self.get_events(task_id)
-        last_id = 0
-        for ev in history:
-            yield ev
-        factory = get_session_factory()
-        async with factory() as session:
-            q = select(func.max(TaskEventRecord.id)).where(
-                TaskEventRecord.task_id == task_id
-            )
-            last_id = (await session.execute(q)).scalar() or 0
-
-        queue = self.subscribe(task_id)
-        task = await self.get_task(task_id)
-        if task and task.status in ("completed", "failed", "cancelled", "timeout"):
-            return
-
+    async def stream_events(self, task_id: str, after_id: int = 0):
+        """每个订阅者按数据库游标独立回放，断线后从 after_id 续传。"""
+        last = after_id
+        idle_rounds = 0
+        terminal = {"completed", "failed", "cancelled", "timeout"}
         while True:
-            try:
-                ev = await asyncio.wait_for(queue.get(), timeout=30)
-                yield ev
-                if ev.type == "result":
-                    break
-            except asyncio.TimeoutError:
-                task = await self.get_task(task_id)
-                if task and task.status in (
-                    "completed",
-                    "failed",
-                    "cancelled",
-                    "timeout",
-                ):
-                    break
+            batch = await self.get_events(task_id, after_id=last)
+            if batch:
+                idle_rounds = 0
+                for ev in batch:
+                    last = ev.id or last
+                    yield ev
+                    if ev.type == "result":
+                        return
+                continue
+            task = await self.get_task(task_id)
+            if task and task.status in terminal and not task.attention_required:
+                return
+            await asyncio.sleep(0.4)
+            idle_rounds += 1
+            if idle_rounds >= 75:
                 yield TaskEvent(type="heartbeat", content="ping")
+                idle_rounds = 0

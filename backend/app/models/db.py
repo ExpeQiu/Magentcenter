@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, func
+from sqlalchemy import DateTime, Float, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -108,6 +108,12 @@ class TaskRecord(Base):
     start_date: Mapped[str] = mapped_column(String(16), default="")
     due_date: Mapped[str] = mapped_column(String(16), default="")
     node_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    owner_center_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    origin: Mapped[str] = mapped_column(String(32), default="local")
+    visibility: Mapped[str] = mapped_column(String(32), default="private")
+    lifecycle_status: Mapped[str] = mapped_column(String(32), default="")
+    cancel_requested_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    revision: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -259,6 +265,154 @@ class SkillRecord(Base):
     )
 
 
+class ExecutionRecord(Base):
+    """某次运行尝试。本地任务和跨端委托各写一行，断网补传不增加 attempt。"""
+
+    __tablename__ = "executions"
+    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_executions_dedupe"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    owner_center_id: Mapped[str] = mapped_column(String(64), default="")
+    delegation_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    node_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    dedupe_key: Mapped[str] = mapped_column(String(96), default="")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="accepted")
+    runtime: Mapped[str] = mapped_column(String(32), default="")
+    agent_id: Mapped[str] = mapped_column(String(128), default="")
+    handle_kind: Mapped[str] = mapped_column(String(32), default="")
+    handle_token: Mapped[str] = mapped_column(String(128), default="")
+    sequence: Mapped[int] = mapped_column(Integer, default=0)
+    external_write: Mapped[int] = mapped_column(Integer, default=0)
+    cancel_ack_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class DelegationRecord(Base):
+    """路由中心上的一次子步骤委托。重投不改变 delegation_id。"""
+
+    __tablename__ = "delegations"
+    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_delegations_idem"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_center_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    target_node_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    idempotency_key: Mapped[str] = mapped_column(String(128), default="")
+    payload_hash: Mapped[str] = mapped_column(String(64), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    auth_snapshot_json: Mapped[str] = mapped_column(Text, default="{}")
+    delivery_status: Mapped[str] = mapped_column(String(32), default="pending")
+    parent_task_ref: Mapped[str] = mapped_column(String(80), default="")
+    root_task_ref: Mapped[str] = mapped_column(String(80), default="")
+    trace_id: Mapped[str] = mapped_column(String(64), default="")
+    depth: Mapped[int] = mapped_column(Integer, default=1)
+    ancestor_json: Mapped[str] = mapped_column(Text, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class InboxRecord(Base):
+    __tablename__ = "inbox"
+    __table_args__ = (UniqueConstraint("message_id", name="uq_inbox_message"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[str] = mapped_column(String(64), default="")
+    source_node_id: Mapped[str] = mapped_column(String(64), default="")
+    message_type: Mapped[str] = mapped_column(String(64), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    acked: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class OutboxRecord(Base):
+    __tablename__ = "outbox"
+    __table_args__ = (UniqueConstraint("message_id", name="uq_outbox_message"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    message_id: Mapped[str] = mapped_column(String(64), default="")
+    target_center_id: Mapped[str] = mapped_column(String(64), default="")
+    message_type: Mapped[str] = mapped_column(String(64), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    acked: Mapped[int] = mapped_column(Integer, default=0)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class EnrollmentVoucherRecord(Base):
+    __tablename__ = "enrollment_vouchers"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, default="")
+    role: Mapped[str] = mapped_column(String(32), default="edge")
+    uses_left: Mapped[int] = mapped_column(Integer, default=1)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class NodeCredentialRecord(Base):
+    __tablename__ = "node_credentials"
+
+    node_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, default="")
+    role: Mapped[str] = mapped_column(String(32), default="full")
+    revoked: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class WorkspaceLinkRecord(Base):
+    __tablename__ = "workspace_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "local_workspace_id",
+            "remote_center_id",
+            "remote_workspace_id",
+            name="uq_workspace_link",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    local_workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    remote_center_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    remote_workspace_id: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class ConfirmationRecord(Base):
+    __tablename__ = "confirmations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    subject_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    session_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+    target_json: Mapped[str] = mapped_column(Text, default="{}")
+    scope: Mapped[str] = mapped_column(String(64), default="local")
+    task_id: Mapped[str] = mapped_column(String(36), default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class DeviceTaskLinkRecord(Base):
+    """对话设备只能读取自己会话里产生的任务。"""
+
+    __tablename__ = "device_task_links"
+    __table_args__ = (UniqueConstraint("device_id", "task_id", name="uq_device_task"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    device_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    session_id: Mapped[str] = mapped_column(String(64), default="")
+    task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 _engine = None
 _session_factory = None
 
@@ -290,6 +444,12 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("fleet_nodes", "handshake_expires", "DATETIME"),
     ("knowledge_entries", "layer", "VARCHAR(16) DEFAULT ''"),
     ("knowledge_entries", "facet", "VARCHAR(32) DEFAULT ''"),
+    ("tasks", "owner_center_id", "VARCHAR(64) DEFAULT ''"),
+    ("tasks", "origin", "VARCHAR(32) DEFAULT 'local'"),
+    ("tasks", "visibility", "VARCHAR(32) DEFAULT 'private'"),
+    ("tasks", "lifecycle_status", "VARCHAR(32) DEFAULT ''"),
+    ("tasks", "cancel_requested_at", "DATETIME"),
+    ("tasks", "revision", "INTEGER DEFAULT 0"),
 ]
 
 
@@ -318,6 +478,23 @@ async def create_tables() -> None:
     async with _engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         await _migrate_columns(conn)
+
+
+async def backfill_task_owners(center_id: str) -> int:
+    """历史任务归到当前这个库所在的中心。可重复执行。"""
+    from sqlalchemy import text
+
+    factory = get_session_factory()
+    async with factory() as session:
+        result = await session.execute(
+            text(
+                "UPDATE tasks SET owner_center_id = :center "
+                "WHERE owner_center_id IS NULL OR owner_center_id = ''"
+            ),
+            {"center": center_id},
+        )
+        await session.commit()
+        return int(result.rowcount or 0)
 
 
 def get_session_factory() -> async_sessionmaker[AsyncSession]:

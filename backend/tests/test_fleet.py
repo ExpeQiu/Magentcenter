@@ -651,3 +651,47 @@ def test_any_endpoint_calls_other_agent_including_cloud(db, monkeypatch):
             )
 
     asyncio.run(scenario())
+
+
+def test_default_terminal_matches_host_not_cloud():
+    ident = {
+        "hostname": "ExpedeMac-mini.local",
+        "node_id": "expedemac-mini",
+        "ips": ["192.168.0.200"],
+        "link_node_id": "expedemac-mini",
+        "cloud_host": "47.113.225.93",
+        "local_cloud": False,
+        "owns_cloud": False,
+    }
+    assert fleet.node_matches_deployment(
+        {"id": "expedemac-mini", "hostname": "ExpedeMac-mini.local"}, ident
+    )
+    assert not fleet.node_matches_deployment(
+        {"id": "izf8zgg9kexsflo1bqs1q9z", "hostname": "iZf8zgg9kexsflo1bqs1q9Z"}, ident
+    )
+    assert not fleet.node_matches_deployment(
+        {"id": "macmin1", "hostname": "QiubindeMac-mini.local"}, ident
+    )
+    winner = fleet._self_node_id(
+        [
+            {"id": "macmin1", "hostname": "QiubindeMac-mini.local"},
+            {"id": "expedemac-mini", "hostname": "ExpedeMac-mini.local"},
+            {"id": "izf8zgg9kexsflo1bqs1q9z", "hostname": "iZf8zgg9kexsflo1bqs1q9Z"},
+        ],
+        ident,
+    )
+    assert winner == "expedemac-mini"
+
+
+def test_default_terminal_matches_ip():
+    ident = {
+        "hostname": "box.local",
+        "node_id": "box",
+        "ips": ["10.0.0.8"],
+        "link_node_id": "",
+        "cloud_host": "10.0.0.8",
+        "local_cloud": False,
+        "owns_cloud": True,
+    }
+    assert fleet.node_matches_deployment({"id": "edge-1", "hostname": "10.0.0.8"}, ident)
+    assert fleet.node_matches_deployment({"id": "box", "hostname": "10.0.0.8"}, ident)

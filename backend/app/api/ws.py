@@ -1,4 +1,4 @@
-"""WebSocket 事件流 API。"""
+"""WebSocket 事件流。每个连接按游标读取，不和 SSE 抢同一条内存队列。"""
 
 import asyncio
 from datetime import datetime
@@ -8,6 +8,7 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from app.models.schemas import TaskEvent
 
 router = APIRouter(tags=["websocket"])
+_TERMINAL = {"completed", "failed", "cancelled", "timeout"}
 
 
 @router.websocket("/ws/tasks/{task_id}")
@@ -19,30 +20,32 @@ async def ws_task_events(websocket: WebSocket, task_id: str):
         await websocket.close(code=4004, reason="task not found")
         return
 
-    history = await tm.get_events(task_id)
-    for ev in history:
-        await websocket.send_json(_event_payload(ev))
-
-    queue = tm.subscribe(task_id)
+    last = 0
+    try:
+        query = websocket.query_params.get("after") or "0"
+        last = int(query)
+    except ValueError:
+        last = 0
+    idle = 0
     try:
         while True:
-            try:
-                ev = await asyncio.wait_for(queue.get(), timeout=30)
-            except asyncio.TimeoutError:
-                task = await tm.get_task(task_id)
-                if task and task.status in (
-                    "completed",
-                    "failed",
-                    "cancelled",
-                    "timeout",
-                ):
-                    break
-                await websocket.send_json({"type": "heartbeat", "content": "ping"})
+            batch = await tm.get_events(task_id, after_id=last)
+            if batch:
+                idle = 0
+                for ev in batch:
+                    last = ev.id or last
+                    await websocket.send_json(_event_payload(ev))
+                    if ev.type == "result":
+                        return
                 continue
-
-            await websocket.send_json(_event_payload(ev))
-            if ev.type == "result":
-                break
+            task = await tm.get_task(task_id)
+            if task and task.status in _TERMINAL and not task.attention_required:
+                return
+            await asyncio.sleep(0.4)
+            idle += 1
+            if idle >= 75:
+                await websocket.send_json({"type": "heartbeat", "content": "ping"})
+                idle = 0
     except WebSocketDisconnect:
         pass
     finally:

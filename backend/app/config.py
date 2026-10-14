@@ -20,6 +20,14 @@ class Settings(BaseSettings):
     port: int = 8013
     log_level: str = "INFO"
     database_url: str = "sqlite+aiosqlite:///./data/agentcenter.db"
+    # cloud：全局中心；full：PC/Mac 自治节点；edge：轻量执行端
+    deploy_profile: str = "full"
+    # auto 按 profile 决定；on / off 显式覆盖
+    local_executor_scan: str = "auto"
+    cloud_connector: str = "auto"
+    local_auth_enabled: bool = True
+    admin_token: str = ""
+    min_free_mb: int = 64
 
     # 双运行时：openclaw,hermes
     runtimes: str = "openclaw,hermes"
@@ -89,6 +97,36 @@ class Settings(BaseSettings):
 
     def is_runtime_enabled(self, runtime: str) -> bool:
         return runtime in self.enabled_runtimes()
+
+    def normalized_profile(self) -> str:
+        value = (self.deploy_profile or "full").strip().lower()
+        if value not in {"cloud", "full", "edge"}:
+            return "full"
+        return value
+
+    def executors_enabled(self) -> bool:
+        mode = (self.local_executor_scan or "auto").strip().lower()
+        if mode == "on":
+            return True
+        if mode == "off":
+            return False
+        return self.normalized_profile() != "cloud"
+
+    def connector_enabled(self) -> bool:
+        mode = (self.cloud_connector or "auto").strip().lower()
+        if mode == "on":
+            return True
+        if mode == "off":
+            return False
+        return self.normalized_profile() == "full"
+
+    def execution_slots(self) -> int:
+        profile = self.normalized_profile()
+        if profile == "cloud" or not self.executors_enabled():
+            return 0
+        if profile == "edge":
+            return 1
+        return max(1, int(self.max_concurrent_tasks or 1))
 
 
 @lru_cache

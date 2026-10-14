@@ -386,12 +386,34 @@ def run_local(task: dict, mock: bool) -> dict:
 
 
 def execute_and_finish(cloud: Cloud, task: dict, mock: bool) -> None:
+    store = get_store()
+    attempt = int(task.get("attempt") or 1)
+    if not store.begin(task["id"], attempt):
+        logger.info("duplicate execution skipped task=%s attempt=%s", task.get("id"), attempt)
+        for item in store.pending():
+            if item["task_id"] != task["id"]:
+                continue
+            try:
+                cloud.finish(task["id"], item["result"])
+                store.ack(task["id"])
+            except Exception:
+                logger.exception("finish replay failed task=%s", task.get("id"))
+        return
     result = run_local(task, mock)
+    store.save_result(task["id"], result)
     try:
         cloud.finish(task["id"], result)
+        store.ack(task["id"])
         logger.info("reported task=%s status=%s", task["id"], result["status"])
     except Exception:
         logger.exception("finish failed task=%s", task.get("id"))
+
+
+def get_store() -> "EdgeStore":
+    from agentcenter_fleet.store import EdgeStore
+
+    path = _env("FLEET_EDGE_DB") or str(Path.home() / ".agentcenter" / "edge.db")
+    return EdgeStore(path)
 
 
 def serve_webhook(cloud: Cloud, port: int, secret: str, mock: bool) -> None:
@@ -531,6 +553,14 @@ def main() -> int:
             args=(cloud, args.webhook_port, args.enroll_token, args.mock),
             daemon=True,
         ).start()
+
+    for item in get_store().pending():
+        try:
+            cloud.finish(item["task_id"], item["result"])
+            get_store().ack(item["task_id"])
+            logger.info("replayed result task=%s", item["task_id"])
+        except Exception:
+            logger.exception("replay result failed task=%s", item["task_id"])
 
     scan_box = {"at": time.time(), "agents": agents}
 

@@ -6,23 +6,23 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PORT="${PORT:-8013}"
 "$ROOT/scripts/stop-frontend.sh" 2>/dev/null || true
 
-PID_FILE="$ROOT/logs/agentcenter.pid"
+APP_SUPPORT="${HOME}/Library/Application Support/AgentCenter"
+PID_FILE="${AGENTCENTER_DATA_DIR:-$APP_SUPPORT/data}/agentcenter.pid"
+LEGACY_PID="$ROOT/logs/agentcenter.pid"
+if [[ ! -f "$PID_FILE" && -f "$LEGACY_PID" ]]; then
+  PID_FILE="$LEGACY_PID"
+fi
 
-if [[ ! -f "$PID_FILE" ]] || ! kill -0 "$(cat "$PID_FILE" 2>/dev/null)" 2>/dev/null; then
-  pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
-  if [[ -n "$pids" ]]; then
-    echo "[stop] 停止端口 $PORT 上的进程: $pids"
-    kill $pids 2>/dev/null || true
-    sleep 1
-    pids=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null || true)
-    [[ -z "$pids" ]] || kill -9 $pids 2>/dev/null || true
-  fi
+UID_NUM=$(id -u)
+if launchctl print "gui/$UID_NUM/com.agentcenter.backend" >/dev/null 2>&1; then
+  echo "[stop] 停止登录自启的节点服务"
+  launchctl bootout "gui/$UID_NUM/com.agentcenter.backend" 2>/dev/null || true
 fi
 
 if [[ -f "$PID_FILE" ]]; then
   PID=$(cat "$PID_FILE")
   if kill -0 "$PID" 2>/dev/null; then
-    echo "[stop] 停止 AgentCenter PID=$PID"
+    echo "[stop] 停止节点服务 PID=$PID"
     kill "$PID" 2>/dev/null || true
     sleep 1
     if kill -0 "$PID" 2>/dev/null; then
@@ -34,5 +34,5 @@ if [[ -f "$PID_FILE" ]]; then
   fi
   rm -f "$PID_FILE"
 else
-  echo "[stop] AgentCenter 未运行（无 PID 文件）"
+  echo "[stop] 没有记录中的节点服务。端口 $PORT 上的其他进程不会被结束。"
 fi

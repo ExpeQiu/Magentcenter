@@ -109,6 +109,73 @@ def slug_node_id(hostname: str) -> str:
     return (base or "device")[:64]
 
 
+def _norm_host(value: str) -> str:
+    text = (value or "").strip().lower()
+    if text.endswith(".local"):
+        text = text[: -len(".local")]
+    return text
+
+
+def _host_ips() -> list[str]:
+    """本机对外 IPv4。回环和链路本地地址不能用来认终端。"""
+    found: list[str] = []
+    try:
+        infos = socket.getaddrinfo(socket.gethostname(), None)
+    except OSError as exc:
+        logger.info("fleet self address lookup failed err=%s", exc)
+        return found
+    for info in infos:
+        ip = info[4][0]
+        if ip.startswith("127.") or ip == "::1" or ip.lower().startswith("fe80:") or ":" in ip:
+            continue
+        if ip not in found:
+            found.append(ip)
+    return found
+
+
+def deployment_identity() -> dict[str, Any]:
+    """当前进程所在机器：主机名、节点号、局域网 IP，以及这份部署登记过的 node_id。"""
+    hostname = socket.gethostname()
+    saved = _read_link_file()
+    cloud_url = str(saved.get("cloud_url") or "")
+    cloud_host = (urlparse(cloud_url).hostname or "").lower() if cloud_url else ""
+    ips = _host_ips()
+    return {
+        "hostname": hostname,
+        "node_id": slug_node_id(hostname),
+        "ips": ips,
+        "link_node_id": str(saved.get("node_id") or "").strip().lower(),
+        "cloud_host": cloud_host,
+        "local_cloud": is_self_cloud(cloud_url) if cloud_url else False,
+        "owns_cloud": (is_self_cloud(cloud_url) if cloud_url else False) or (bool(cloud_host) and cloud_host in ips),
+    }
+
+
+def node_matches_deployment(info: dict[str, Any], ident: dict[str, Any]) -> bool:
+    """部署身份或 IP 对得上，才是这台机器自己的终端。"""
+    node_id = str(info.get("id") or "").strip().lower()
+    host = _norm_host(str(info.get("hostname") or ""))
+    raw_host = str(info.get("hostname") or "").strip().lower()
+    self_name = _norm_host(str(ident.get("hostname") or ""))
+    self_id = str(ident.get("node_id") or "")
+    link_id = str(ident.get("link_node_id") or "")
+    if link_id and node_id == link_id:
+        return True
+    if self_id and node_id == self_id:
+        return True
+    if host and (host == self_name or slug_node_id(host) == self_id):
+        return True
+    ips = {ip.lower() for ip in ident.get("ips") or []}
+    if raw_host and raw_host in ips:
+        return True
+    cloud_host = str(ident.get("cloud_host") or "")
+    if ident.get("owns_cloud") and cloud_host and (
+        raw_host == cloud_host or node_id == slug_node_id(cloud_host)
+    ):
+        return True
+    return False
+
+
 def _clean_agents(raw: Any) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
@@ -230,6 +297,108 @@ def _visible_to_workspace(info: dict[str, Any], workspace_id: str) -> bool:
     return owner == workspace_id
 
 
+def _terminal_shell(
+    *,
+    node_id: str,
+    name: str,
+    hostname: str,
+    platform_name: str,
+    mode: str,
+    agents: list[dict[str, str]],
+    bound: bool,
+    online: bool,
+    capabilities: list[str] | None = None,
+) -> dict[str, Any]:
+    cleaned = _clean_agents(agents)
+    resolved_mode = mode if mode in ("plugin", "webhook", "local") else "plugin"
+    return {
+        "id": node_id,
+        "name": name or hostname or node_id,
+        "runtimes": _runtimes([a["runtime"] for a in cleaned]),
+        "agents": cleaned,
+        "seen": cleaned,
+        "hostname": hostname,
+        "platform": platform_name,
+        "mode": resolved_mode,
+        "webhook_url": "",
+        "online": online,
+        "enrolled": True,
+        "bound": bound,
+        "workspace_id": "",
+        "last_seen": None,
+        "load": None,
+        "running_count": 0,
+        "queued_count": 0,
+        "capabilities": capabilities if capabilities is not None else capabilities_of(cleaned),
+        "handshake": "ok",
+        "handshake_at": None,
+        "self": False,
+        "addresses": [],
+    }
+
+
+def _with_linked_terminals(nodes: list[dict[str, Any]], ident: dict[str, Any]) -> list[dict[str, Any]]:
+    """名册没有行时，用本机链接里的本机和其他端补上，供终端切换。"""
+    saved = _read_link_file()
+    if str(saved.get("state") or "") != "ok":
+        return nodes
+    known = {str(node.get("id") or "") for node in nodes}
+    merged = list(nodes)
+    node_id = str(saved.get("node_id") or "").strip().lower()
+    if node_id and node_id not in known:
+        hostname = str(ident.get("hostname") or node_id)
+        agents = saved.get("agents") if isinstance(saved.get("agents"), list) else []
+        caps = saved.get("capabilities") if isinstance(saved.get("capabilities"), list) else None
+        merged.append(
+            _terminal_shell(
+                node_id=node_id,
+                name=hostname.split(".")[0] or "本机",
+                hostname=hostname,
+                platform_name=platform.system().lower(),
+                mode="local",
+                agents=agents,
+                bound=bool(saved.get("bound")),
+                online=True,
+                capabilities=caps,
+            )
+        )
+        known.add(node_id)
+    for peer in saved.get("peers") or []:
+        if not isinstance(peer, dict):
+            continue
+        peer_id = str(peer.get("id") or "").strip()
+        if not peer_id or peer_id in known:
+            continue
+        agents = peer.get("agents") if isinstance(peer.get("agents"), list) else []
+        caps = peer.get("capabilities") if isinstance(peer.get("capabilities"), list) else None
+        merged.append(
+            _terminal_shell(
+                node_id=peer_id,
+                name=str(peer.get("name") or peer.get("hostname") or peer_id),
+                hostname=str(peer.get("hostname") or ""),
+                platform_name=str(peer.get("platform") or ""),
+                mode=str(peer.get("mode") or "plugin"),
+                agents=agents,
+                bound=True,
+                online=bool(peer.get("online")),
+                capabilities=caps,
+            )
+        )
+        known.add(peer_id)
+    return merged
+
+
+def _self_node_id(nodes: list[dict[str, Any]], ident: dict[str, Any]) -> str:
+    matched = [node for node in nodes if node_matches_deployment(node, ident)]
+    by_id = {str(node.get("id") or "").lower(): str(node.get("id") or "") for node in matched}
+    for preferred in (str(ident.get("link_node_id") or "").lower(), str(ident.get("node_id") or "").lower()):
+        if preferred and preferred in by_id:
+            return by_id[preferred]
+    if not matched:
+        return ""
+    return str(matched[0].get("id") or "")
+
+
 async def list_nodes(workspace_id: str = "") -> list[dict[str, Any]]:
     factory = get_session_factory()
     counts = await _counts()
@@ -239,11 +408,20 @@ async def list_nodes(workspace_id: str = "") -> list[dict[str, Any]]:
         ).scalars().all()
         infos = [to_info(r, counts) for r in rows]
     visible = [n for n in infos if _visible_to_workspace(n, workspace_id)]
-    logger.debug(
-        "fleet nodes listed workspace=%s total=%d visible=%d",
+    ident = deployment_identity()
+    visible = _with_linked_terminals(visible, ident)
+    winner = _self_node_id(visible, ident)
+    for node in visible:
+        node["self"] = bool(winner) and node.get("id") == winner
+        node["addresses"] = list(ident["ips"]) if node["self"] else []
+    visible.sort(key=lambda n: (0 if n.get("self") else 1, str(n.get("name") or "")))
+    logger.info(
+        "fleet nodes listed workspace=%s total=%d self=%s host=%s ips=%s",
         workspace_id or "-",
-        len(infos),
         len(visible),
+        winner or "-",
+        ident.get("hostname") or "-",
+        ",".join(ident.get("ips") or []) or "-",
     )
     return visible
 
@@ -1022,6 +1200,11 @@ async def claim(token: str) -> dict[str, Any] | None:
                 "system_prompt": task.system_prompt or "",
                 "session_id": task.session_id or "",
             }
+    from app.core.execution import accept_remote
+
+    fresh = await accept_remote(payload["id"], rec.id, attempt=1)
+    if not fresh:
+        logger.info("fleet claim already received task=%s node=%s", payload["id"], rec.id)
     logger.info(
         "fleet claimed task=%s node=%s runtime=%s agent=%s",
         payload["id"],
@@ -1066,6 +1249,23 @@ async def finish(
         if task.node_id != rec.id:
             raise FleetAuthError("task belongs to another node")
         if task.status not in ("queued", "running"):
+            if task.node_id != rec.id:
+                raise FleetAuthError("task belongs to another node")
+            if task.status == status:
+                return {
+                    "id": task.id,
+                    "node_id": task.node_id,
+                    "status": task.status,
+                    "agent_id": task.agent_id,
+                    "runtime": task.runtime,
+                    "prompt": task.prompt or "",
+                    "output": task.output or "",
+                    "error": task.error or "",
+                    "session_id": task.session_id or "",
+                    "workspace_id": task.workspace_id or "",
+                    "system_prompt": task.system_prompt or "",
+                    "duration_ms": int(task.duration_ms or 0),
+                }
             raise FleetError(f"task already finished: {task.status}")
         task.status = status
         task.output = output or ""

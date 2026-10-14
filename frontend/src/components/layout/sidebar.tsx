@@ -22,7 +22,7 @@ export function Sidebar({ healthLabel }: SidebarProps) {
     { href: "/", label: "超级AI", icon: "✦" },
     { href: wp.kanban(), label: "办公室", icon: "🏢" },
     { href: wp.tasks(), label: "任务", icon: "📋" },
-    { href: wp.projects(), label: "SOP工作流", icon: "🔁" },
+    { href: wp.projects(), label: "workflow", icon: "🔁" },
     { href: wp.agents(), label: "Agents", icon: "🤖" },
     { href: wp.squads(), label: "小队", icon: "👥" },
     { href: wp.autopilots(), label: "Autopilot", icon: "⏱" },
@@ -42,7 +42,10 @@ export function Sidebar({ healthLabel }: SidebarProps) {
           className="flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-left hover:bg-slate-800/60"
         >
           <div>
-            <p className="text-xs text-slate-500">终端</p>
+            <p className="text-xs text-slate-500">
+              {selected?.self ? "本机" : "终端"}
+              {selected?.addresses?.[0] ? ` · ${selected.addresses[0]}` : ""}
+            </p>
             <p className="truncate text-sm font-semibold">{selected?.name || "未选择"}</p>
           </div>
           <span className="text-slate-500">{open ? "▴" : "▾"}</span>

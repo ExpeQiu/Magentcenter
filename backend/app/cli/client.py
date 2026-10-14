@@ -15,6 +15,26 @@ logger = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "http://127.0.0.1:8013"
 
 
+def _local_session_token() -> str:
+    explicit = os.getenv("AGENTCENTER_SESSION", "").strip()
+    if explicit:
+        return explicit
+    candidates = []
+    data_dir = os.getenv("AGENTCENTER_DATA_DIR", "").strip()
+    if data_dir:
+        candidates.append(os.path.join(data_dir, "local_session.token"))
+    home = os.path.expanduser("~/Library/Application Support/AgentCenter/data/local_session.token")
+    candidates.append(home)
+    candidates.append(
+        os.path.join(os.path.dirname(__file__), "..", "..", "data", "local_session.token")
+    )
+    for path in candidates:
+        if path and os.path.isfile(path):
+            with open(path, encoding="utf-8") as handle:
+                return handle.read().strip()
+    return ""
+
+
 class ApiError(Exception):
     def __init__(self, status: int, detail: str):
         self.status = status
@@ -40,9 +60,11 @@ class AgentCenterClient:
     ) -> Any:
         url = f"{self.base_url}{path}"
         logger.debug("%s %s params=%s", method, url, params)
+        headers = {"X-AgentCenter-Session": _local_session_token()}
+        headers = {key: value for key, value in headers.items() if value}
         try:
             with httpx.Client(timeout=self.timeout) as client:
-                resp = client.request(method, url, params=params, json=json_body)
+                resp = client.request(method, url, params=params, json=json_body, headers=headers)
         except httpx.HTTPError as exc:
             raise ApiError(0, f"upstream unreachable: {exc}") from exc
         if resp.status_code >= 400:
