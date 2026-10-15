@@ -29,6 +29,21 @@ export interface WorkspaceInfo {
   updated_at: string;
 }
 
+export interface ChainEvent {
+  id: number;
+  kind: string;
+  run_id: string;
+  task_id: string;
+  actor_id: string;
+  target_id: string;
+  channel: string;
+  intent: string;
+  status: string;
+  summary: string;
+  detail: Record<string, unknown>;
+  created_at: string;
+}
+
 export interface TaskInfo {
   id: string;
   workspace_id: string;
@@ -80,7 +95,7 @@ export interface FleetNode {
   seen: FleetAgent[];
   hostname: string;
   platform: string;
-  mode: "plugin" | "webhook" | "local";
+  mode: "plugin" | "webhook" | "local" | "voice";
   webhook_url: string;
   online: boolean;
   enrolled: boolean;
@@ -492,6 +507,7 @@ export interface HealthResponse {
   hermes_version?: string;
   default_runtime?: RuntimeName | string;
   mock_mode: boolean;
+  deploy_profile?: string;
 }
 
 export interface StreamEvent {

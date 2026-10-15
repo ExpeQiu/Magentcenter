@@ -124,7 +124,7 @@ fleet-edge（plugin / webhook）
 - 本机：控制台 `/{workspace}/fleet` 扫描协调器上的 OpenClaw / Hermes，勾选后绑定。绑定的智能体由协调器本机执行
 - 握手：同一页「握手并绑定」用注册令牌和云端互相证明，把本机智能体绑定到云端，并取回其他已绑定端的智能体与能力（`openclaw.agent` / `hermes.chat` / `task.execute`）。地址留空表示这台协调器。云端若还是旧接口（没有 `/api/fleet/handshake`），则改走注册和设备列表。已写在 `data/fleet_link.json` 的地址不会被 `FLEET_CLOUD_URL` 盖回
 - 其他设备：安装独立包 `fleet-edge/`（`pip install` 后运行 `fleet-edge`）。它在 NAT 后扫描本机智能体并上报。控制台里对待绑定设备勾选确认
-- 侧栏按设备名切换当前终端。多端页和新建任务都跟着这台设备走
+- 侧栏按设备名切换当前终端。多端页和新建任务都跟着这台设备走。本机打开默认「本地PC」；云端服务（端口 8080，或 `deploy_profile=cloud`）类别默认「云服务器」，绑定终端是「云端」。本次会话里手动选过的终端会保留
 - 给智能体分配任务可以在「任务」里做。已绑定设备上的智能体会出现在新建任务的列表中，并带到对应设备
 - 任意已绑定端（含云端本机）可以调用其他端上的智能体或子智能体：`POST /api/fleet/call`。带设备令牌时调用方是该终端；不带令牌时调用方是云端本机。目标必须是另一台已绑定设备上的智能体。绑定列表中的第一个是主智能体，其余按子智能体派发。目标在云端本机则由协调器执行，在其他设备则排队等该设备领取并回写结果
 - `node_id=auto` 只选当前在线、且已绑定该智能体的设备。指定离线设备时任务排队，等连接器来领
@@ -150,17 +150,18 @@ fleet-edge（plugin / webhook）
 - **Phase 14**：Outputs→ArtifactRef 批量建指；Embedding 批量重嵌入；告警 profile 导入导出；卡片质量评分
 - **Phase 15**：多端只做扫描和绑定。给智能体的任务统一从「任务」发出
 - **Phase 16**：知识库改为 Personal Wiki 三层加权召回；技能捕获 / 提炼 / 验证已按 ADR-003 落地
-- **Phase 17（当前）**：首页为「超级AI」对话页。`POST /api/super-ai/turn` 统一处理文字与语音转写，只调用任务、知识库、技能、输出物、系统、多端；建任务须回复「确认」
+- **Phase 17**：首页为「超级AI」对话页。`POST /api/super-ai/turn` 统一处理文字与语音转写，只调用任务、知识库、技能、输出物、系统、多端；建任务须回复「确认」
+- **Phase 18（当前）**：超级AI在规则对不上时直连 OpenAI 兼容模型（第三方或本机）。闲聊直接回复；派发只点名已绑定名册，确认后本机建任务或跨端调用，结果回到同一条对话。地址、模型和 Key 写在 `data/super_ai.json`，已写出的字段不用环境变量盖回
 
 ## 超级AI
 
 路由 `/` 是对话页。`POST /api/super-ai/turn` 与设备上的 `/device/turn` 走同一条 `handle_turn`。控制台仍在 `/{workspace}/tasks`。
 
-意图是规则，不是模型分类。空话、帮助、取消、打开页面、建任务、列任务、查知识、列技能、最近产出、系统、设备，各有固定说法。对不上返回 `unknown`，并说明可以问什么。
+固定说法仍走规则，不打模型：帮助、取消、打开页面、建任务、列任务、查知识、列技能、最近产出、系统、连接状态、设备。对不上、且模型已配置或处于 Mock 时，交给 OpenAI 兼容的 `chat/completions`。简单问题由超级AI直接回答。只有复杂、专业，或用户指定了名册里的角色，才 `dispatch` 到多端智能体；模型若把简单问题标成派发，服务端会改回直接回复。名册是已绑定且在线的 Agent，加上本机注册表；语音端不在其中。解析失败或目标不在名册内，就当闲聊，不建任务。每一轮回复都不能空。模型未配置、超时或失败时，仍说明可以问哪些服务。
 
-建任务时选默认智能体，没有默认就用列表第一台。回复里带 `pending`（动作、原文、智能体、runtime）。下一句是「确认」「执行」「做吧」或「把它做了」才 `create_task`。取消类说法丢掉确认单。工作区 slug 非法时落到 `cyber`。
+分配任务直接执行，不再等「确认」。规则建任务时选默认智能体。模型派发则按名册：本机走 `create_task`，其他端走 `call_peer_as_cloud`。取消类说法只丢掉还没执行的确认单。工作区 slug 非法时落到 `cyber`。
 
-网页把最近 20 条对话放在 `sessionStorage`。回复若带 `href`，页面上可点进控制台。按住说话依赖浏览器语音识别。Mock 模式，或当前浏览器不能识别时，松手改发固定一句「有哪些进行中的任务」。
+网页把最近 20 条对话放在 `sessionStorage`，并用 `session_id` 让服务端留最近几轮给模型。任务发出后，页面对 `task_id` 轮询，把排队、执行中、完成或失败追加到同一条对话。回复若带 `href`，页面上可点进控制台。按住说话依赖浏览器语音识别。Mock 模式，或当前浏览器不能识别时，松手改发固定一句「有哪些进行中的任务」。模型配置在首页「模型」里保存，Key 只显示是否已设置。
 
 日志：`super_ai turn run_id=… intent=… service=… workspace=… task_id=… elapsed_ms=…`。失败打异常栈，对用户只说这项服务暂时不可用。
 
@@ -168,17 +169,34 @@ fleet-edge（plugin / webhook）
 
 `device_channel` 把只对话、不领任务的端收成 `mode=voice`：不扫描智能体，`bound=0`。标识若已被连接器占用，注册失败。`platform=esp32` 是语音固件，`platform=desktop` 是桌面小牛。
 
+人手绑定走控制台 `/bind` 加 6 位短码，不把长期令牌放进链接。设备先要短码和只属于自己的轮询密文；登录后的人提交短码；设备在约 10 分钟内凭轮询密文取回令牌。短码用过即废，重新绑定会作废旧令牌。批量灌机仍用 `FLEET_ENROLL_TOKEN`。
+
 | 步骤 | 接口 | 头 |
 |------|------|----|
-| 用 `FLEET_ENROLL_TOKEN` 换设备令牌 | `POST /api/super-ai/device/enroll` | — |
+| 设备要短码 | `POST /api/super-ai/device/pair` | — |
+| 人在 `/bind` 提交短码 | `POST /api/super-ai/device/pair/claim` | 本机会话 |
+| 设备取回令牌 | `POST /api/super-ai/device/pair/status` | — |
+| 批量灌机换令牌 | `POST /api/super-ai/device/enroll` | — |
 | 说一句话 | `POST /api/super-ai/device/turn` | `X-Device-Token` |
 | 取回播报 | `GET /api/super-ai/device/tasks/{id}` | 同上 |
 
-`channel=voice`（默认）把回复截到约 480 字。`channel=desktop` 放到约 2000 字，给悬浮气泡。任务未结束时只报「仍在排队 / 执行中」；结束后播输出、错误或「已取消」。固件每 2 秒轮询，最多约 2 分钟，然后提示稍后再问进度。心跳沿用多端的在线判定，所以这些终端也会出现在设备列表里，但不会 `claim`。桌面小牛只把管家场景转到这里，行情和提醒留在本机。
+日志：`super_ai pair start device=…`、`super_ai pair claimed device=…`。短码、轮询密文和设备令牌不进日志。失败只记 `rejected` 与设备标识。
+
+`channel=voice`（默认）把回复截到约 480 字。`channel=desktop` 放到约 2000 字，给悬浮气泡。任务未结束时只报「仍在排队 / 执行中」。完成后先抽出执行正文，再由超级AI收成短话（信息链记 `translate`），然后才作为播报返回；同一任务只转译一次。固件每 2 秒轮询，最多约 2 分钟，然后提示稍后再问进度。心跳沿用多端的在线判定，所以这些终端也会出现在设备列表里，但不会 `claim`。桌面小牛只把管家场景转到这里，行情和提醒留在本机。
 
 ### 信息链
 
-跨设备的经过记在 `chain_events`，用 `GET /api/chain?task_id=` 按时间读出。登记、每一轮超级AI对话、调用方、派发、webhook 推送结果、领取、执行结束、设备取回最终结果，各是一行。确认建任务时，会把同一设备上一条「建任务」对话补上同一个 `task_id`。正文会脱敏并截断。令牌不入库。心跳只更新名册的 `last_seen`，不逐条进信息链。日志键：`chain kind=… run_id=… task_id=… actor=… target=… intent=… status=…`。
+跨设备的经过记在 `chain_events`，用 `GET /api/chain?task_id=` 按时间读出，任务详情页按这个顺序展示。登记、开口、派发、webhook、领取、执行结束、结果转译、回传给语音终端，各是一行。直接派发的那一轮对话自己带上 `task_id`。正文会脱敏并截断。令牌不入库。心跳只更新名册的 `last_seen`，不逐条进信息链。日志键：`chain kind=… run_id=… task_id=… actor=… target=… intent=… status=…`。
+
+## 云端部署
+
+`DEPLOY_PROFILE=cloud` 只跑协调器。执行槽位为 0，不扫描本机 OpenClaw / Hermes，能力声明只有 `conversation.text`。
+
+云上保留：超级AI 全局入口、云端任务、设备名册与登记、跨端路由、可靠消息、四类身份、审计、协调器健康。控制台对应超级AI、云端任务、多端、信息链、协调器状态。
+
+本机完整版（`full`）才有：执行器、知识库、技能正文、输出物、小队、Autopilot、Kanban、本机会话、Gateway/Cron、桌面。上文「扫描协调器上的 OpenClaw / Hermes 并由协调器本机执行」只属于 `full`。
+
+云端数据在服务器本地盘。个人目录不挂载，WaytoAI 全量同步不进入云端注册流程。
 
 ## 多端自治
 

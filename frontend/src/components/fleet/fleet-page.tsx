@@ -30,7 +30,7 @@ function modeLabel(mode: FleetNode["mode"]) {
 
 export function FleetPage() {
   const { workspaceId, workspace } = useWorkspace();
-  const { nodes, selected, error, select, refresh } = useTerminal();
+  const { nodes, selected, mode, error, select, refresh } = useTerminal();
   const [scan, setScan] = useState<FleetScan | null>(null);
   const [scanning, setScanning] = useState(false);
   const [scanError, setScanError] = useState("");
@@ -251,7 +251,7 @@ export function FleetPage() {
     <div>
       <PageHeader
         title="多端"
-        description={`${workspace?.name || "当前团队"} · ${selected?.name || "未选择终端"}。云端在中心，设备和智能体按绑定关系展开。分配任务仍在「任务」。`}
+        description={`${workspace?.name || "当前团队"} · ${mode === "cloud" ? "云端" : selected?.name || "未选择终端"}。云端在中心，设备和智能体按绑定关系展开。分配任务仍在「任务」。`}
       />
       {error && <p className="mb-3 text-sm text-rose-300">{error}</p>}
       {msg && <p className="mb-3 text-sm text-slate-300">{msg}</p>}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import time
@@ -44,10 +45,49 @@ _TASK_LIST = (
 )
 _SKILLS = ("有哪些技能", "技能列表", "有什么技能", "技能目录", "能用的技能")
 _OUTPUTS = ("最近产出", "输出物", "最近的文件", "最近输出")
-_SYSTEM = ("系统是否正常", "系统状态", "健康检查", "服务是否正常", "系统正常")
+_SYSTEM = (
+    "系统是否正常",
+    "系统状态",
+    "健康检查",
+    "服务是否正常",
+    "系统正常",
+    "连接状态",
+    "连上了吗",
+    "连上没有",
+    "通不通",
+    "通了吗",
+)
+_PROFESSIONAL = (
+    "分析",
+    "排查",
+    "审计",
+    "自检",
+    "调研",
+    "复盘",
+    "部署",
+    "修复",
+    "重构",
+    "实现",
+    "编写",
+    "写代码",
+    "开发",
+    "持仓",
+    "回测",
+    "策略",
+    "诊断",
+    "深入",
+    "专业",
+    "优化",
+    "设计方案",
+    "写报告",
+    "出报告",
+    "评估",
+    "对比方案",
+)
+_ROLE_CUE = ("让", "交给", "叫", "请", "用", "找", "指定")
 _FLEET = ("哪台设备", "设备在线", "在线设备", "多端状态", "有哪些设备")
 _OPEN_AGAIN = ("打开刚才那个", "打开刚才", "打开它")
-_HELP = ("你好", "嗨", "在吗", "帮助", "你是谁", "你能做什么", "你会什么")
+_HELP = ("帮助", "你是谁", "你能做什么", "你会什么")
 
 _NAV = {
     "任务": "tasks",
@@ -75,7 +115,7 @@ _STATUS = {
 
 _HELP_REPLY = (
     "我可以查进行中的任务、帮你建任务、查知识库、看技能和最近产出，"
-    "也可以看系统与设备是否在线。建任务会先说一遍，你回复「确认」后才执行。"
+    "也可以看系统与设备是否在线。分配任务会直接交给已绑定的智能体。"
 )
 
 
@@ -171,9 +211,12 @@ def _finish(
     pending: SuperAiPending | None = None,
     task_id: str = "",
     task_status: str = "",
+    dispatch: bool = False,
     started: float,
     workspace: str,
 ) -> SuperAiTurnResponse:
+    if not (reply or "").strip():
+        reply = "我在。"
     logger.info(
         "super_ai turn run_id=%s intent=%s service=%s workspace=%s task_id=%s elapsed_ms=%d",
         run_id,
@@ -192,6 +235,7 @@ def _finish(
         pending=pending,
         task_id=task_id,
         task_status=task_status,
+        dispatch=dispatch,
     )
 
 
@@ -206,6 +250,42 @@ async def _pick_agent(registry):
 
 
 async def handle_turn(
+    text: str,
+    *,
+    workspace_slug: str,
+    pending: SuperAiPending | None,
+    last_href: str,
+    registry,
+    task_manager,
+    monitor,
+    confirmation_id: str = "",
+    session_id: str = "",
+    subject_id: str = "local",
+) -> SuperAiTurnResponse:
+    from app.core import super_ai_session as sessions
+
+    result = await _route_turn(
+        text,
+        workspace_slug=workspace_slug,
+        pending=pending,
+        last_href=last_href,
+        registry=registry,
+        task_manager=task_manager,
+        monitor=monitor,
+        confirmation_id=confirmation_id,
+        session_id=session_id,
+        subject_id=subject_id,
+    )
+    raw = (text or "").strip()
+    if raw and (session_id or "").strip() and result.intent != "empty":
+        try:
+            await sessions.remember(session_id, raw, result.reply)
+        except Exception:
+            logger.exception("super_ai session write failed session=%s", (session_id or "")[:12])
+    return result
+
+
+async def _route_turn(
     text: str,
     *,
     workspace_slug: str,
@@ -263,14 +343,13 @@ async def handle_turn(
                 workspace=slug,
             )
         if parsed.intent == "create_task":
-            return await _prepare_create(
+            return await _dispatch_local(
                 run_id,
                 parsed.query,
                 registry,
+                task_manager,
                 started=started,
                 workspace=slug,
-                session_id=session_id,
-                subject_id=subject_id,
             )
         if confirmation_id and parsed.intent == "confirm_create":
             return await _commit_confirmation(
@@ -284,6 +363,10 @@ async def handle_turn(
                 subject_id=subject_id,
             )
         if parsed.intent == "confirm_create" and pending:
+            if pending.action == "call_peer":
+                return await _commit_peer(
+                    run_id, pending, slug, task_manager, started=started, workspace=slug
+                )
             return await _commit_create(
                 run_id, pending, slug, task_manager, started=started, workspace=slug
             )
@@ -319,31 +402,314 @@ async def handle_turn(
             workspace=slug,
         )
 
-    return _finish(
-        run_id,
-        "unknown",
-        "",
-        "我没对上可调用的服务。可以问进行中的任务、技能、知识库、最近产出，或系统是否正常。",
-        started=started,
-        workspace=slug,
-    )
+    try:
+        return await _ask_model(
+            run_id,
+            raw,
+            registry,
+            task_manager,
+            started=started,
+            workspace=slug,
+            session_id=session_id,
+            subject_id=subject_id,
+        )
+    except Exception:
+        logger.exception("super_ai model failed run_id=%s", run_id)
+        return _finish(run_id, "unknown", "", _UNKNOWN, started=started, workspace=slug)
 
 
-async def _prepare_create(
+_UNKNOWN = "我没对上可调用的服务。可以问进行中的任务、技能、知识库、最近产出，或系统是否正常。"
+
+
+def _role_labels(roster: list[dict]) -> list[str]:
+    labels: list[str] = []
+    for item in roster:
+        for key in ("name", "agent_id"):
+            label = str(item.get(key) or "").strip()
+            if len(label) >= 2 and label not in labels:
+                labels.append(label)
+    return labels
+
+
+def names_role(text: str, roster: list[dict]) -> bool:
+    """用户点名了名册里的角色。"""
+    raw = text or ""
+    folded = raw.lower()
+    for label in _role_labels(roster):
+        hit = label if label in raw else ""
+        if not hit and label.lower() in folded:
+            hit = label
+        if not hit:
+            continue
+        idx = raw.lower().find(hit.lower())
+        window = raw[max(0, idx - 6) : idx]
+        if any(cue in window for cue in _ROLE_CUE):
+            return True
+    return False
+
+
+def needs_agent(text: str, roster: list[dict]) -> bool:
+    """复杂、专业，或指定了角色，才交给多端智能体。"""
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if names_role(raw, roster):
+        return True
+    return any(word in raw for word in _PROFESSIONAL)
+
+
+def _match_roster(roster: list[dict], node_id: str, runtime: str, agent_id: str) -> dict | None:
+    for item in roster:
+        if (
+            str(item.get("node_id") or "") == node_id
+            and item.get("runtime") == runtime
+            and item.get("agent_id") == agent_id
+        ):
+            return item
+    return None
+
+
+async def list_roster(registry, workspace_slug: str) -> list[dict]:
+    """已绑定且在线的智能体，加上本机注册表。语音端不进可派发名单。"""
+    slug = _slug(workspace_slug)
+    wid = ""
+    try:
+        wid = await workspace_service.resolve_workspace_id(slug) or ""
+    except Exception:
+        logger.info("super_ai roster workspace skipped slug=%s", slug)
+    nodes: list[dict] = []
+    try:
+        nodes = await fleet_service.list_nodes(wid)
+    except Exception:
+        logger.exception("super_ai roster nodes failed workspace=%s", slug)
+    entries: list[dict] = []
+    seen: set[tuple[str, str, str]] = set()
+    self_id = ""
+    for node in nodes:
+        if (node.get("mode") or "") == "voice":
+            continue
+        if not node.get("bound") or not node.get("online"):
+            continue
+        local = bool(node.get("self") or (node.get("mode") or "") == "local")
+        node_id = str(node.get("id") or "")
+        if local and node_id:
+            self_id = node_id
+        for agent in node.get("agents") or []:
+            if not isinstance(agent, dict):
+                continue
+            runtime = str(agent.get("runtime") or "")
+            agent_id = str(agent.get("id") or "")
+            if runtime not in ("openclaw", "hermes") or not agent_id:
+                continue
+            key = (node_id, runtime, agent_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            entries.append(
+                {
+                    "node_id": node_id,
+                    "runtime": runtime,
+                    "agent_id": agent_id,
+                    "name": str(agent.get("name") or agent_id),
+                    "local": local,
+                }
+            )
+    try:
+        agents = await registry.list_agents()
+    except Exception:
+        logger.exception("super_ai roster registry failed")
+        agents = []
+    for agent in agents or []:
+        runtime = getattr(agent, "runtime", "") or "openclaw"
+        agent_id = getattr(agent, "id", "") or ""
+        if runtime not in ("openclaw", "hermes") or not agent_id:
+            continue
+        if any(
+            item["local"] and item["runtime"] == runtime and item["agent_id"] == agent_id
+            for item in entries
+        ):
+            continue
+        key = (self_id, runtime, agent_id)
+        if key in seen:
+            continue
+        seen.add(key)
+        entries.append(
+            {
+                "node_id": self_id,
+                "runtime": runtime,
+                "agent_id": agent_id,
+                "name": getattr(agent, "name", "") or agent_id,
+                "local": True,
+            }
+        )
+    logger.info("super_ai roster count=%d workspace=%s", len(entries), slug)
+    return entries
+
+
+async def _ask_model(
     run_id,
-    prompt,
+    raw,
     registry,
+    task_manager,
     *,
     started,
     workspace,
-    session_id: str = "",
-    subject_id: str = "local",
+    session_id: str,
+    subject_id: str,
 ):
+    from app.core import super_ai_llm as llm
+    from app.core import super_ai_session as sessions
+
+    if not llm.configured():
+        return _finish(run_id, "unknown", "", _UNKNOWN, started=started, workspace=workspace)
+    try:
+        roster = await list_roster(registry, workspace)
+    except Exception:
+        logger.exception("super_ai roster failed run_id=%s", run_id)
+        roster = []
+    history: list[dict[str, str]] = []
+    if session_id:
+        try:
+            history = await sessions.recent(session_id)
+        except Exception:
+            logger.exception("super_ai session read failed run_id=%s", run_id)
+    decision = await llm.complete(
+        run_id=run_id, user_text=raw, history=history, roster=roster
+    )
+    if decision is not None and decision.action == "dispatch" and not needs_agent(raw, roster):
+        reply = (decision.text or "").strip() or "这个问题我直接回答，不派给其他智能体。"
+        logger.info("super_ai dispatch blocked run_id=%s reason=simple", run_id)
+        return _finish(run_id, "chat", "", reply, started=started, workspace=workspace)
+    if decision is None or decision.action != "dispatch":
+        if decision is None:
+            reply = _UNKNOWN
+            intent = "unknown"
+        else:
+            reply = decision.text or "我在。"
+            intent = "chat"
+        return _finish(run_id, intent, "", reply, started=started, workspace=workspace)
+    if not decision.prompt or decision.runtime not in ("openclaw", "hermes"):
+        return _finish(
+            run_id,
+            "chat",
+            "",
+            decision.text or "要交给哪台已绑定的智能体、做什么？",
+            started=started,
+            workspace=workspace,
+        )
+    hit = _match_roster(roster, decision.node_id, decision.runtime, decision.agent_id)
+    if hit is None:
+        return _finish(
+            run_id,
+            "chat",
+            "",
+            decision.text or "这个智能体不在已绑定名册里，我没有派发。",
+            started=started,
+            workspace=workspace,
+        )
+    return await _dispatch_hit(
+        run_id,
+        hit,
+        decision.prompt,
+        task_manager,
+        started=started,
+        workspace=workspace,
+    )
+
+
+async def _dispatch_hit(
+    run_id,
+    hit: dict,
+    prompt: str,
+    task_manager,
+    *,
+    started,
+    workspace,
+):
+    """名册命中后直接派发，不再等「确认」。"""
+    local = bool(hit.get("local"))
+    runtime = hit.get("runtime") if hit.get("runtime") in ("openclaw", "hermes") else "openclaw"
+    pending = SuperAiPending(
+        action="create_task" if local else "call_peer",
+        prompt=prompt,
+        agent_id=str(hit.get("agent_id") or ""),
+        agent_name=str(hit.get("name") or hit.get("agent_id") or ""),
+        runtime=runtime,
+        node_id=str(hit.get("node_id") or ""),
+    )
+    if local:
+        result = await _commit_create(
+            run_id, pending, workspace, task_manager, started=started, workspace=workspace
+        )
+    else:
+        result = await _commit_peer(
+            run_id, pending, workspace, task_manager, started=started, workspace=workspace
+        )
+    result.intent = "dispatch"
+    result.dispatch = True
+    result.pending = None
+    logger.info(
+        "super_ai assign run_id=%s node=%s agent=%s task_id=%s local=%s",
+        run_id,
+        pending.node_id or "-",
+        pending.agent_id or "-",
+        result.task_id or "-",
+        local,
+    )
+    return result
+
+
+async def _commit_peer(run_id, pending: SuperAiPending, slug, task_manager, *, started, workspace):
+    wid = await workspace_service.resolve_workspace_id(slug) or ""
+    try:
+        info = await fleet_service.call_peer_as_cloud(
+            target=pending.node_id,
+            runtime=pending.runtime,
+            agent_id=pending.agent_id,
+            prompt=pending.prompt,
+            task_manager=task_manager,
+            workspace_id=wid,
+        )
+    except fleet_service.FleetError:
+        logger.exception(
+            "super_ai dispatch failed run_id=%s node=%s agent=%s",
+            run_id,
+            pending.node_id,
+            pending.agent_id,
+        )
+        return _finish(
+            run_id,
+            "confirm_create",
+            "fleet",
+            "暂时不能派到那台设备。",
+            dispatch=True,
+            started=started,
+            workspace=workspace,
+        )
+    status = str(info.get("status") or "queued")
+    label = _STATUS.get(status, status)
+    name = pending.agent_name or pending.agent_id
+    return _finish(
+        run_id,
+        "confirm_create",
+        "fleet",
+        f"已交给「{name}」，当前{label}。做完后把结果收成短话发回。",
+        href=_href(slug, "tasks/detail", f"id={info['id']}"),
+        task_id=str(info.get("id") or ""),
+        task_status=status,
+        dispatch=True,
+        started=started,
+        workspace=workspace,
+    )
+
+
+async def _dispatch_local(run_id, prompt, registry, task_manager, *, started, workspace):
+    """固定说法的建任务也直接执行。"""
     body = (prompt or "").strip(" ：:，,。")
     if not body:
         return _finish(
             run_id,
-            "create_task",
+            "dispatch",
             "tasks",
             "要我做什么？例如：帮我建一个任务：整理本周输出。",
             started=started,
@@ -353,7 +719,7 @@ async def _prepare_create(
     if not agent:
         return _finish(
             run_id,
-            "create_task",
+            "dispatch",
             "tasks",
             "还没有可用的智能体，暂时不能建任务。",
             started=started,
@@ -366,34 +732,19 @@ async def _prepare_create(
         agent_name=agent.name or agent.id,
         runtime=agent.runtime,
     )
-    finished = _finish(
-        run_id,
-        "create_task",
-        "tasks",
-        f"将用「{pending.agent_name}」新建任务：{body}。回复「确认」后执行。目标在本机，未授权的正文不会上传。",
-        pending=pending,
-        started=started,
-        workspace=workspace,
+    result = await _commit_create(
+        run_id, pending, workspace, task_manager, started=started, workspace=workspace
     )
-    try:
-        from app.core.confirmations import issue_confirmation
-
-        finished.confirmation_id = await issue_confirmation(
-            subject_id=subject_id or "local",
-            session_id=session_id or run_id,
-            summary=body,
-            target={
-                "agent_id": pending.agent_id,
-                "agent_name": pending.agent_name,
-                "prompt": pending.prompt,
-                "runtime": pending.runtime,
-                "workspace_id": workspace,
-            },
-            scope="local",
-        )
-    except Exception:
-        logger.info("confirmation skipped run_id=%s", run_id)
-    return finished
+    result.intent = "dispatch"
+    result.dispatch = True
+    result.pending = None
+    logger.info(
+        "super_ai assign run_id=%s node=- agent=%s task_id=%s local=True",
+        run_id,
+        pending.agent_id,
+        result.task_id or "-",
+    )
+    return result
 
 
 async def _commit_confirmation(
@@ -429,16 +780,26 @@ async def _commit_confirmation(
             workspace=workspace,
         )
     target = opened.get("target") or {}
+    action = target.get("action") if target.get("action") in ("create_task", "call_peer") else "create_task"
+    runtime = target.get("runtime") if target.get("runtime") in ("openclaw", "hermes") else "openclaw"
     pending = SuperAiPending(
-        action="create_task",
+        action=action,
         prompt=target.get("prompt") or opened.get("summary") or "",
         agent_id=target.get("agent_id") or "",
         agent_name=target.get("agent_name") or "",
-        runtime=target.get("runtime") or "openclaw",
+        runtime=runtime,
+        node_id=str(target.get("node_id") or ""),
     )
-    result = await _commit_create(
-        run_id, pending, slug, task_manager, started=started, workspace=workspace
-    )
+    if action == "call_peer":
+        result = await _commit_peer(
+            run_id, pending, slug, task_manager, started=started, workspace=workspace
+        )
+    else:
+        result = await _commit_create(
+            run_id, pending, slug, task_manager, started=started, workspace=workspace
+        )
+    if target.get("source") == "model":
+        result.dispatch = True
     if result.task_id:
         await attach_task(confirmation_id, result.task_id)
     result.confirmation_id = confirmation_id
@@ -453,6 +814,7 @@ async def _commit_create(run_id, pending: SuperAiPending, slug, task_manager, *,
             prompt=pending.prompt,
             runtime=pending.runtime,
             workspace_id=wid,
+            node_id=pending.node_id or "",
         )
     )
     label = _STATUS.get(task.status, task.status)
@@ -460,7 +822,7 @@ async def _commit_create(run_id, pending: SuperAiPending, slug, task_manager, *,
         run_id,
         "confirm_create",
         "tasks",
-        f"已交给 AgentCenter 执行，当前{label}。完成后把结果发回。",
+        f"已交给「{pending.agent_name or pending.agent_id}」执行，当前{label}。做完后把结果收成短话发回。",
         href=_href(slug, "tasks/detail", f"id={task.id}"),
         task_id=task.id,
         task_status=task.status,
@@ -469,14 +831,34 @@ async def _commit_create(run_id, pending: SuperAiPending, slug, task_manager, *,
     )
 
 
+def extract_result_text(raw: str) -> str:
+    """从执行器 JSON 里取出给人看的正文。普通文本原样返回。"""
+    text = (raw or "").strip()
+    if not text.startswith("{"):
+        return text
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError:
+        return text
+    inner = data.get("result") if isinstance(data.get("result"), dict) else data
+    if not isinstance(inner, dict):
+        return text
+    parts = [
+        str(item.get("text") or "").strip()
+        for item in inner.get("payloads") or []
+        if isinstance(item, dict) and str(item.get("text") or "").strip()
+    ]
+    return "\n".join(parts).strip() or text
+
+
 def task_spoken(task) -> dict[str, str | bool]:
     """把任务状态收成设备能播的一句。未结束时只报进度。"""
     status = task.status or ""
     done = status in ("completed", "failed", "cancelled")
     if status == "completed":
-        text = (task.output or "").strip() or "任务已完成。"
+        text = extract_result_text(task.output or "") or "任务已完成。"
     elif status == "failed":
-        text = (task.error or "").strip() or "任务失败。"
+        text = extract_result_text(task.error or "") or "任务失败。"
     elif status == "cancelled":
         text = "任务已取消。"
     else:
@@ -489,6 +871,37 @@ def task_spoken(task) -> dict[str, str | bool]:
         "done": done,
         "reply": text,
     }
+
+
+async def brief_for_device(task, *, actor_id: str = "") -> str:
+    """完成结果先转成短话。同一任务只转译一次，写进信息链。"""
+    from app.core import super_ai_llm as llm
+    from app.core.chain import append_chain, list_chain
+
+    source = extract_result_text(task.output or "") or "任务已完成。"
+    rows = await list_chain(task_id=task.id)
+    for row in rows:
+        if row.kind == "translate" and row.summary:
+            logger.info("super_ai brief reuse task_id=%s", task.id)
+            return row.summary
+    spoken = await llm.summarize_spoken(run_id=(task.id or "")[:12], source=source)
+    fallback = spoken is None
+    if fallback:
+        spoken = source if len(source) <= 480 else source[:479] + "…"
+        logger.info("super_ai brief fallback task_id=%s", task.id)
+    elif len(spoken) > 480:
+        spoken = spoken[:479] + "…"
+    await append_chain(
+        kind="translate",
+        task_id=task.id,
+        actor_id="super-ai",
+        target_id=actor_id,
+        channel="voice",
+        status=task.status or "",
+        summary=spoken,
+        detail={"fallback": fallback},
+    )
+    return spoken
 
 
 async def _list_tasks(run_id, slug, active_only, task_manager, *, started, workspace):
@@ -592,6 +1005,16 @@ async def _list_outputs(run_id, slug, *, started, workspace):
 
 
 async def _system(run_id, slug, monitor, *, started, workspace):
+    if not monitor.settings.executors_enabled():
+        return _finish(
+            run_id,
+            "system",
+            "system",
+            "协调器正常，本机没有执行器。",
+            href=_href(slug, "system"),
+            started=started,
+            workspace=workspace,
+        )
     status = await monitor.get_system_status(force_refresh=False)
     parts = []
     for pane in status.runtimes or []:

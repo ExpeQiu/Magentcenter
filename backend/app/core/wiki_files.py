@@ -73,7 +73,10 @@ def _iter_markdown(root: Path):
 
 
 def list_wiki_hits(*, layers: list[str] | None = None, limit: int = 50) -> list[KnowledgeHit]:
-    root = Path(wiki_dir()).expanduser()
+    raw = (wiki_dir() or "").strip()
+    if not raw:
+        return []
+    root = Path(raw).expanduser()
     if not root.is_dir():
         logger.info("wiki dir missing path=%s", root)
         return []
@@ -100,7 +103,10 @@ def search_wiki_hits(
     weight_raw: str | None = None,
     limit: int = 20,
 ) -> list[KnowledgeHit]:
-    root = Path(wiki_dir()).expanduser()
+    raw = (wiki_dir() or "").strip()
+    if not raw:
+        return []
+    root = Path(raw).expanduser()
     if not root.is_dir():
         return []
     want = {item for item in (layers or []) if item}
@@ -127,7 +133,10 @@ def get_wiki_hit(entry_id: str) -> KnowledgeHit | None:
     if not entry_id.startswith("wiki:"):
         return None
     rel_text = entry_id[len("wiki:") :]
-    root = Path(wiki_dir()).expanduser().resolve()
+    raw = (wiki_dir() or "").strip()
+    if not raw:
+        return None
+    root = Path(raw).expanduser().resolve()
     if not root.is_dir():
         return None
     path = (root / rel_text).resolve()

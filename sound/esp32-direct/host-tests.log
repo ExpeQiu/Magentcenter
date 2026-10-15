@@ -1,0 +1,14 @@
+test_text_font_metadata_uses_bundle_charset_size_and_bpp (test_build_default_assets.BuildDefaultAssetsTest.test_text_font_metadata_uses_bundle_charset_size_and_bpp) ... ok
+test_text_font_requires_bundle (test_build_default_assets.BuildDefaultAssetsTest.test_text_font_requires_bundle) ... ok
+test_common_and_core_changes_select_all (test_release.BoardSelectionTests.test_common_and_core_changes_select_all) ... ok
+test_docs_only_selects_none (test_release.BoardSelectionTests.test_docs_only_selects_none) ... ok
+test_nested_manufacturer_board_path (test_release.BoardSelectionTests.test_nested_manufacturer_board_path) ... ok
+test_invalid_version_rule_fails_collection (test_release.InvalidConfigTests.test_invalid_version_rule_fails_collection) ... ok
+test_current_matrix_counts_and_uniqueness (test_release.VersionTests.test_current_matrix_counts_and_uniqueness) ... ok
+test_parse_and_match (test_release.VersionTests.test_parse_and_match) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.037s
+
+OK
+Generated: /var/folders/q6/gc7f8f5d0xdg1j4mt_13dgjm0000gn/T/tmp6k96b3_j/index.json

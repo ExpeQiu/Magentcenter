@@ -1,0 +1,14 @@
+2026-10-14 22:52
+port=/dev/cu.usbmodem21101
+mac=84:c7:bb:60:21:94
+before=xiaozhi 1.9.2 (Oct 14 2026 07:42:19, idf v5.3.5)
+backup=/tmp/esp32-before-direct-20261014.bin (16MB)
+image=agentcenter-direct-preserved-nvs.bin sha256=c314eea21d7b268f730407254a040e07e7acbf69144af6f17dcb224592990c63
+write=9651268 bytes at 0x0, hash verified, 24.8s
+cloud=http://47.113.225.93:8080/api/health HTTP 200
+probe:
+I (101) cpu_start: GPIO 44 and 43 are used as console UART I/O pI (18923) AgentCenterDirect: device -> AgentCenter /api/super-ai/device/turn: HTTP 200, transport=ESP_OK
+I (18923) AgentCenterDirect: Direct cloud probe OK: {"run_id":"531245134d66","reply":"协调器正常，本机没有执行器。","intent":"system","service":"system","href":"/cyber/system","pending":null,"task_id":"","task_status":"","confirmation_id":"","dispatch":false}
+I (19283) SystemInfo: free sram: 99283 minimal sram: 74651
+I (29283) SystemInfo: free sram: 99175 minimal sram: 74651
+I (39283) SystemInfo: free sram: 99367 minimal sram: 74651

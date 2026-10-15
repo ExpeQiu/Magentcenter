@@ -5,8 +5,20 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { API_BASE, api, ensureSession } from "@/lib/api";
 import { useWorkspacePaths } from "@/lib/context/workspace-context";
-import type { StreamEvent, TaskInfo } from "@/lib/types";
+import type { ChainEvent, StreamEvent, TaskInfo } from "@/lib/types";
 import { StatusBadge } from "@/components/ui/status-badge";
+
+const CHAIN_LABEL: Record<string, string> = {
+  turn: "开口",
+  dispatch: "派发",
+  call: "调用",
+  webhook: "推送",
+  claim: "领取",
+  finish: "完成",
+  translate: "转译",
+  deliver: "回传",
+  enroll: "登记",
+};
 
 export function TaskDetailView() {
   const params = useSearchParams();
@@ -14,6 +26,7 @@ export function TaskDetailView() {
   const wp = useWorkspacePaths();
   const [task, setTask] = useState<TaskInfo | null>(null);
   const [events, setEvents] = useState<StreamEvent[]>([]);
+  const [chain, setChain] = useState<ChainEvent[]>([]);
   const [startDate, setStartDate] = useState("");
   const [dueDate, setDueDate] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -25,6 +38,7 @@ export function TaskDetailView() {
       setStartDate(t.start_date || "");
       setDueDate(t.due_date || "");
     }).catch(console.error);
+    api.chain(taskId).then(setChain).catch(console.error);
   }, [taskId]);
 
   useEffect(() => {
@@ -39,7 +53,10 @@ export function TaskDetailView() {
           if (data.id && prev.some((item) => item.id === data.id)) return prev;
           return [...prev, data];
         });
-        if (type === "result") api.task(taskId).then(setTask);
+        if (type === "result") {
+          api.task(taskId).then(setTask);
+          api.chain(taskId).then(setChain).catch(() => undefined);
+        }
       } catch {}
     };
     ensureSession().then(() => {
@@ -177,6 +194,34 @@ export function TaskDetailView() {
             保存排期
           </button>
         </div>
+      </section>
+      <section className="mb-6">
+        <h2 className="mb-2 text-sm font-medium text-slate-400">传递链路</h2>
+        <ol className="space-y-2">
+          {chain.length === 0 ? (
+            <li className="text-sm text-slate-500">还没有传递记录。</li>
+          ) : (
+            chain.map((row) => (
+              <li
+                key={row.id}
+                className="rounded-xl border border-slate-800 bg-slate-900/50 px-4 py-3 text-sm"
+              >
+                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                  <span className="rounded bg-slate-800 px-1.5 py-0.5 text-slate-200">
+                    {CHAIN_LABEL[row.kind] || row.kind}
+                  </span>
+                  {row.actor_id ? <span>从 {row.actor_id}</span> : null}
+                  {row.target_id ? <span>到 {row.target_id}</span> : null}
+                  {row.status ? <span>{row.status}</span> : null}
+                  <span>{row.created_at?.replace("T", " ").slice(0, 19)}</span>
+                </div>
+                {row.summary ? (
+                  <p className="mt-1 whitespace-pre-wrap text-slate-200">{row.summary}</p>
+                ) : null}
+              </li>
+            ))
+          )}
+        </ol>
       </section>
       <section className="mb-6">
         <h2 className="mb-2 text-sm font-medium text-slate-400">实时事件</h2>

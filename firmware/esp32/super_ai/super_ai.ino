@@ -14,7 +14,8 @@
 const char *WIFI_SSID = "your-ssid";
 const char *WIFI_PASS = "your-pass";
 const char *CLOUD_URL = "http://192.168.1.10:8013";
-const char *ENROLL_TOKEN = "change-me";
+// 留空走控制台 /bind 的 6 位短码。批量灌机时填入与云端 FLEET_ENROLL_TOKEN 相同的值。
+const char *ENROLL_TOKEN = "";
 const char *DEVICE_ID = "esp32-room";
 const char *DEVICE_NAME = "客厅";
 const char *WORKSPACE = "cyber";
@@ -56,6 +57,60 @@ bool getJson(const String &path, String &response) {
   response = http.getString();
   http.end();
   return code >= 200 && code < 300;
+}
+
+bool pairDevice() {
+  JsonDocument doc;
+  doc["device_id"] = DEVICE_ID;
+  doc["name"] = DEVICE_NAME;
+  doc["platform"] = "esp32";
+  String body;
+  serializeJson(doc, body);
+  String raw;
+  if (!postJson("/api/super-ai/device/pair", body, raw)) {
+    return false;
+  }
+  JsonDocument res;
+  if (deserializeJson(res, raw)) {
+    return false;
+  }
+  String code = res["code"].as<String>();
+  String secret = res["poll_secret"].as<String>();
+  const char *path = res["bind_path"] | "/bind";
+  Serial.println("在已登录的控制台打开 /bind ，输入验证码：");
+  Serial.println(code);
+  Serial.printf("或打开 %s?code=%s\n", path, code.c_str());
+  for (int i = 0; i < 300; i++) {
+    delay(2000);
+    JsonDocument poll;
+    poll["device_id"] = DEVICE_ID;
+    poll["poll_secret"] = secret;
+    String pollBody;
+    serializeJson(poll, pollBody);
+    String pollRaw;
+    if (!postJson("/api/super-ai/device/pair/status", pollBody, pollRaw)) {
+      continue;
+    }
+    JsonDocument status;
+    if (deserializeJson(status, pollRaw)) {
+      continue;
+    }
+    const char *state = status["status"] | "";
+    if (strcmp(state, "ready") == 0) {
+      deviceToken = status["device_token"].as<String>();
+      if (deviceToken.length()) {
+        prefs.putString("token", deviceToken);
+        Serial.println("已绑定");
+        return true;
+      }
+    }
+    if (strcmp(state, "expired") == 0) {
+      Serial.println("验证码已过期，重新上电可再要一个");
+      return false;
+    }
+  }
+  Serial.println("等待绑定超时");
+  return false;
 }
 
 bool enroll() {
@@ -166,8 +221,12 @@ void setup() {
     Serial.print(".");
   }
   Serial.println(" ok");
-  if (!deviceToken.length() && !enroll()) {
-    Serial.println("注册失败，检查 ENROLL_TOKEN 与云端地址");
+  if (!deviceToken.length()) {
+    bool factory = strlen(ENROLL_TOKEN) > 0 && strcmp(ENROLL_TOKEN, "change-me") != 0;
+    bool ok = factory ? enroll() : pairDevice();
+    if (!ok) {
+      Serial.println(factory ? "注册失败，检查 ENROLL_TOKEN 与云端地址" : "绑定失败");
+    }
   }
   Serial.println("ready");
 }

@@ -413,6 +413,23 @@ class DeviceTaskLinkRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class DevicePairRecord(Base):
+    """对话终端的一次性绑定。短码给人输入，轮询密文只给发起的那台设备。"""
+
+    __tablename__ = "device_pairs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    name: Mapped[str] = mapped_column(String(128), default="")
+    platform: Mapped[str] = mapped_column(String(32), default="esp32")
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, default="")
+    poll_secret_hash: Mapped[str] = mapped_column(String(64), default="")
+    device_token: Mapped[str] = mapped_column(Text, default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 _engine = None
 _session_factory = None
 

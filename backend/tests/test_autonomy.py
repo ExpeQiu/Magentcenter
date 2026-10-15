@@ -14,7 +14,10 @@ from app.core.autonomy_state import (
     reduce_outcome,
     task_status_v1,
 )
+from app.config import Settings
+from app.core.agent_registry import AgentRegistry
 from app.core.capabilities import catalog_for_profile
+from app.core import content_roots
 from app.core.capabilities import choose_node as choose_capability_node
 from app.core.confirmations import attach_task, bind_device_task, confirm, device_can_read, issue_confirmation
 from app.core.delegations import (
@@ -70,6 +73,22 @@ def test_identity_is_stable_and_alias_does_not_replace_it(tmp_path, monkeypatch)
     aliased = remember_alias("old-host")
     assert aliased.node_id == first.node_id
     assert "old-host" in aliased.aliases
+
+
+def test_cloud_profile_has_no_executors_or_personal_dirs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTCENTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(content_roots, "_load", lambda: {})
+    monkeypatch.setattr(content_roots, "_personal_defaults", lambda: False)
+    assert content_roots.wiki_dir() == ""
+    assert content_roots.skills_dir() == ""
+    assert content_roots.outputs_dir() == ""
+    snap = content_roots.snapshot()
+    assert snap["knowledge_wiki_dir"] == ""
+    assert snap["knowledge_default"] == ""
+    settings = Settings(deploy_profile="cloud", local_executor_scan="auto", ai_mock_mode=True)
+    registry = AgentRegistry(settings)
+    assert settings.execution_slots() == 0
+    assert registry._providers == {}
 
 
 def test_profile_catalog_and_node_choice():

@@ -151,25 +151,73 @@ def create_app() -> FastAPI:
             return await call_next(request)
         from app.core.local_auth import session_matches
 
-        presented = request.headers.get("x-agentcenter-session") or request.cookies.get("ac_session") or ""
-        if session_matches(presented):
+        presented_header = request.headers.get("x-agentcenter-session") or ""
+        presented_cookie = request.cookies.get("ac_session") or ""
+        if session_matches(presented_header) or session_matches(presented_cookie):
             return await call_next(request)
         admin = (settings.admin_token or "").strip()
         if admin and request.headers.get("x-admin-token") == admin:
             return await call_next(request)
         return JSONResponse({"detail": "local session required"}, status_code=401)
 
+    @app.get("/api/session/status")
+    async def session_status(request: Request):
+        from app.core.local_auth import session_matches
+
+        header = request.headers.get("x-agentcenter-session") or ""
+        cookie = request.cookies.get("ac_session") or ""
+        unlocked = session_matches(header) or session_matches(cookie)
+        return {"unlocked": unlocked}
+
+    @app.post("/api/session/unlock")
+    async def unlock_session(request: Request):
+        host = request.client.host if request.client else ""
+        from app.core.local_auth import (
+            clear_failures,
+            code_matches,
+            cooldown_remaining,
+            ensure_local_session,
+            register_failure,
+        )
+
+        remaining = cooldown_remaining(host)
+        if remaining > 0:
+            logger.warning("entry unlock cooled host=%s remaining_s=%.0f", host, remaining)
+            return JSONResponse({"detail": "尝试过多，请稍后再试"}, status_code=429)
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        code = str(body.get("code") or "") if isinstance(body, dict) else ""
+        expected = (settings.entry_code or "").strip() or "Qb123!456"
+        if not code_matches(code, expected):
+            count = register_failure(host)
+            logger.info("entry unlock rejected host=%s failures=%s", host, count)
+            return JSONResponse({"detail": "鉴权码不正确"}, status_code=401)
+        clear_failures(host)
+        token = ensure_local_session()
+        logger.info("entry unlock ok host=%s", host)
+        response = JSONResponse({"ok": True, "token": token})
+        response.set_cookie(
+            "ac_session",
+            token,
+            httponly=True,
+            samesite="lax",
+            max_age=7 * 24 * 60 * 60,
+            path="/",
+        )
+        return response
+
     @app.get("/api/session/bootstrap")
     async def bootstrap_session(request: Request):
         host = request.client.host if request.client else ""
         if host not in {"127.0.0.1", "::1"}:
             return JSONResponse({"detail": "bootstrap is loopback only"}, status_code=403)
-        from app.core.local_auth import ensure_local_session
+        from app.core.local_auth import session_matches
 
-        token = ensure_local_session()
-        response = JSONResponse({"token": token})
-        response.set_cookie("ac_session", token, httponly=True, samesite="lax", path="/")
-        return response
+        header = request.headers.get("x-agentcenter-session") or ""
+        cookie = request.cookies.get("ac_session") or ""
+        return JSONResponse({"unlocked": session_matches(header) or session_matches(cookie)})
 
     @app.get("/api/health", response_model=HealthResponse)
     async def health():
@@ -219,7 +267,17 @@ app = create_app()
 
 
 def _session_public(path: str) -> bool:
-    if path in {"/api/health", "/api/session/bootstrap", "/api/v2/openapi.json", "/api/v2/nodes/enroll"}:
+    if path in {
+        "/api/health",
+        "/api/session/bootstrap",
+        "/api/session/status",
+        "/api/session/unlock",
+        "/api/v2/openapi.json",
+        "/api/v2/nodes/enroll",
+        "/api/super-ai/device/enroll",
+        "/api/super-ai/device/pair",
+        "/api/super-ai/device/pair/status",
+    }:
         return True
     if not path.startswith("/api") and not path.startswith("/ws"):
         return True

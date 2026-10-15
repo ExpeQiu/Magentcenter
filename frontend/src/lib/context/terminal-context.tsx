@@ -5,11 +5,22 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import { api } from "@/lib/api";
 import { useWorkspace } from "@/lib/context/workspace-context";
+import {
+  defaultEndpointMode,
+  isEndpointMode,
+  modeOfNode,
+  preferredDeviceId,
+  reconcileEndpoint,
+  restoreEndpoint,
+  type EndpointMode,
+} from "@/lib/endpoint-mode";
 import type { FleetLink, FleetNode, FleetPeer } from "@/lib/types";
 
 function asAgents(value: FleetNode["agents"] | undefined | null) {
@@ -17,7 +28,7 @@ function asAgents(value: FleetNode["agents"] | undefined | null) {
 }
 
 function asMode(mode: string | undefined): FleetNode["mode"] {
-  if (mode === "local" || mode === "webhook" || mode === "plugin") return mode;
+  if (mode === "local" || mode === "webhook" || mode === "plugin" || mode === "voice") return mode;
   return "plugin";
 }
 
@@ -99,14 +110,6 @@ export function mergeTerminals(listed: FleetNode[], extras: FleetNode[]): FleetN
   });
 }
 
-export function chooseTerminalId(nodes: FleetNode[], selectedId: string): string {
-  if (selectedId && nodes.some((node) => node.id === selectedId)) return selectedId;
-  const self = nodes.find((node) => node.self === true);
-  const local = nodes.find((node) => node.mode === "local" && node.bound);
-  const bound = nodes.find((node) => node.bound);
-  return (self || local || bound || nodes[0])?.id || "";
-}
-
 export function normalizeNode(node: FleetNode): FleetNode {
   const agents = asAgents(node.agents);
   const seen = asAgents(node.seen);
@@ -130,8 +133,11 @@ interface TerminalContextValue {
   nodes: FleetNode[];
   selectedId: string;
   selected: FleetNode | null;
+  mode: EndpointMode;
+  ready: boolean;
   error: string;
   select: (id: string) => void;
+  selectMode: (mode: EndpointMode) => void;
   refresh: () => void;
 }
 
@@ -139,11 +145,19 @@ const TerminalContext = createContext<TerminalContextValue | null>(null);
 
 export function TerminalProvider({ children }: { children: ReactNode }) {
   const { workspaceId, slug } = useWorkspace();
-  const storageKey = `agentcenter.terminal.${workspaceId || slug}`;
+  const scope = workspaceId || slug;
+  const storageKey = `agentcenter.terminal.${scope}`;
+  const modeKey = `agentcenter.endpointMode.${scope}`;
+  const pickedKey = `agentcenter.endpointPicked.${scope}`;
   const [nodes, setNodes] = useState<FleetNode[]>([]);
   const [selectedId, setSelectedId] = useState("");
+  const [mode, setMode] = useState<EndpointMode>("pc");
+  const [fallback, setFallback] = useState<EndpointMode>("pc");
   const [readyKey, setReadyKey] = useState("");
+  const [rosterReady, setRosterReady] = useState(false);
+  const [profileReady, setProfileReady] = useState(false);
   const [error, setError] = useState("");
+  const restored = useRef(false);
 
   const refresh = useCallback(() => {
     Promise.all([
@@ -165,6 +179,7 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
         devicesFromLink(link, workspaceId)
       );
       setNodes(merged);
+      setRosterReady(true);
       setError("");
       console.info(
         "terminal roster listed=%d merged=%d link=%s peers=%d",
@@ -177,9 +192,45 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   }, [workspaceId]);
 
   useEffect(() => {
+    restored.current = false;
+    setRosterReady(false);
+    setProfileReady(false);
+  }, [scope]);
+
+  useLayoutEffect(() => {
+    const storedMode = window.sessionStorage.getItem(modeKey) || "";
+    const picked = window.sessionStorage.getItem(pickedKey) === "1";
+    const nextFallback = defaultEndpointMode({ port: window.location.port });
     setSelectedId(window.sessionStorage.getItem(storageKey) || "");
+    setFallback(nextFallback);
+    setMode(picked && isEndpointMode(storedMode) ? storedMode : nextFallback);
     setReadyKey(storageKey);
-  }, [storageKey]);
+    if (nextFallback === "cloud") setProfileReady(true);
+    console.info("endpoint fallback=%s port=%s picked=%s", nextFallback, window.location.port || "-", picked);
+  }, [storageKey, modeKey, pickedKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .health()
+      .then((health) => {
+        if (cancelled) return;
+        const next = defaultEndpointMode({
+          port: window.location.port,
+          deployProfile: health.deploy_profile,
+        });
+        setFallback(next);
+        setProfileReady(true);
+        console.info("endpoint profile=%s fallback=%s", health.deploy_profile || "-", next);
+      })
+      .catch((err) => {
+        console.error(err);
+        if (!cancelled) setProfileReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [scope]);
 
   useEffect(() => {
     refresh();
@@ -188,27 +239,66 @@ export function TerminalProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   useEffect(() => {
-    if (readyKey !== storageKey || !nodes.length) return;
-    const next = chooseTerminalId(nodes, selectedId);
-    if (!next || next === selectedId) return;
-    setSelectedId(next);
-    window.sessionStorage.setItem(storageKey, next);
-    console.info("terminal default", next);
-  }, [nodes, selectedId, storageKey, readyKey]);
+    if (readyKey !== storageKey || !rosterReady || !profileReady) return;
+    const resolved = restored.current
+      ? reconcileEndpoint(nodes, mode, selectedId)
+      : restoreEndpoint(
+          nodes,
+          window.sessionStorage.getItem(modeKey) || "",
+          window.sessionStorage.getItem(storageKey) || "",
+          fallback,
+          window.sessionStorage.getItem(pickedKey) === "1"
+        );
+    restored.current = true;
+    if (resolved.mode === mode && resolved.deviceId === selectedId) return;
+    setMode(resolved.mode);
+    setSelectedId(resolved.deviceId);
+    window.sessionStorage.setItem(modeKey, resolved.mode);
+    if (resolved.mode !== "cloud" && resolved.deviceId) {
+      window.sessionStorage.setItem(storageKey, resolved.deviceId);
+    }
+    console.info(
+      "endpoint mode=%s device=%s fallback=%s",
+      resolved.mode,
+      resolved.deviceId || "-",
+      fallback
+    );
+  }, [nodes, selectedId, mode, storageKey, modeKey, pickedKey, readyKey, rosterReady, profileReady, fallback]);
 
   const select = useCallback(
     (id: string) => {
+      const node = nodes.find((item) => item.id === id);
+      const nextMode = node ? modeOfNode(node) : mode;
       setSelectedId(id);
+      setMode(nextMode);
       window.sessionStorage.setItem(storageKey, id);
-      console.info("terminal selected", id);
+      window.sessionStorage.setItem(modeKey, nextMode);
+      window.sessionStorage.setItem(pickedKey, "1");
+      console.info("endpoint mode=%s device=%s", nextMode, id);
     },
-    [storageKey]
+    [nodes, mode, storageKey, modeKey, pickedKey]
+  );
+
+  const selectMode = useCallback(
+    (next: EndpointMode) => {
+      const deviceId = preferredDeviceId(nodes, next, selectedId);
+      setMode(next);
+      setSelectedId(deviceId);
+      window.sessionStorage.setItem(modeKey, next);
+      window.sessionStorage.setItem(pickedKey, "1");
+      if (next !== "cloud" && deviceId) window.sessionStorage.setItem(storageKey, deviceId);
+      console.info("endpoint mode=%s device=%s", next, deviceId || "-");
+    },
+    [nodes, selectedId, storageKey, modeKey, pickedKey]
   );
 
   const selected = nodes.find((node) => node.id === selectedId) || null;
+  const ready = readyKey === storageKey;
 
   return (
-    <TerminalContext.Provider value={{ nodes, selectedId, selected, error, select, refresh }}>
+    <TerminalContext.Provider
+      value={{ nodes, selectedId, selected, mode, ready, error, select, selectMode, refresh }}
+    >
       {children}
     </TerminalContext.Provider>
   );
