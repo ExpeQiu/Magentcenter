@@ -14,7 +14,6 @@ from app.core.hermes_monitor import HermesMonitor
 from app.core.openclaw_adapter import OpenClawAdapter
 from app.core.openclaw_monitor import (
     CronJobInfo,
-    GatewayStatus,
     OpenClawMonitor,
     RuntimePane,
     SessionDetail,
@@ -40,12 +39,6 @@ class MonitorHub:
         now = time.monotonic()
         if not force_refresh and self._cache and (now - self._cache_at) < CACHE_TTL:
             return self._cache
-        if not self.settings.executors_enabled():
-            empty = SystemStatus(gateway=GatewayStatus())
-            self._cache = empty
-            self._cache_at = now
-            logger.info("monitor skipped executors_enabled=false")
-            return empty
 
         enabled = self.settings.enabled_runtimes()
         panes: list[RuntimePane] = []

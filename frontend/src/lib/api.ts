@@ -2,7 +2,6 @@ import type {
   AgentInfo,
   AgentStats,
   AlertSettings,
-  ChainEvent,
   AutopilotInfo,
   HealthResponse,
   InstallSkillResult,
@@ -54,59 +53,19 @@ function errorMessageFromBody(text: string, status: number): string {
 
 const REQUEST_TIMEOUT_MS = 20_000;
 let sessionToken = "";
-const unauthorizedListeners = new Set<() => void>();
-
-export function rememberSession(token: string): void {
-  sessionToken = token;
-  if (typeof window !== "undefined" && token) {
-    window.sessionStorage.setItem("ac_session", token);
-  }
-}
-
-export function subscribeUnauthorized(listener: () => void): () => void {
-  unauthorizedListeners.add(listener);
-  return () => unauthorizedListeners.delete(listener);
-}
-
-function noteUnauthorized(): void {
-  sessionToken = "";
-  if (typeof window !== "undefined") window.sessionStorage.removeItem("ac_session");
-  unauthorizedListeners.forEach((listener) => listener());
-}
 
 export async function ensureSession(): Promise<void> {
   if (typeof window === "undefined" || sessionToken) return;
   const cached = window.sessionStorage.getItem("ac_session");
-  if (cached) sessionToken = cached;
-}
-
-export async function sessionUnlocked(): Promise<boolean> {
-  await ensureSession();
-  const headers = new Headers();
-  if (sessionToken) headers.set("X-AgentCenter-Session", sessionToken);
-  const res = await fetch(`${API_BASE}/api/session/status`, {
-    credentials: "include",
-    headers,
-  });
-  if (!res.ok) return false;
-  const data = (await res.json()) as { unlocked?: boolean };
-  return data.unlocked === true;
-}
-
-export async function unlockSession(code: string): Promise<{ ok: boolean; detail: string }> {
-  const res = await fetch(`${API_BASE}/api/session/unlock`, {
-    method: "POST",
-    credentials: "include",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
-  });
-  const data = (await res.json().catch(() => ({}))) as { detail?: unknown; token?: string };
-  if (!res.ok) {
-    const detail = typeof data.detail === "string" && data.detail.trim() ? data.detail : "鉴权码不正确";
-    return { ok: false, detail };
+  if (cached) {
+    sessionToken = cached;
+    return;
   }
-  if (data.token) rememberSession(data.token);
-  return { ok: true, detail: "" };
+  const res = await fetch(`${API_BASE}/api/session/bootstrap`, { credentials: "include" });
+  if (!res.ok) return;
+  const data = (await res.json()) as { token?: string };
+  sessionToken = data.token || "";
+  if (sessionToken) window.sessionStorage.setItem("ac_session", sessionToken);
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -123,7 +82,6 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
       signal: init?.signal ?? ctrl.signal,
     });
     if (!res.ok) {
-      if (res.status === 401) noteUnauthorized();
       const text = await res.text().catch(() => "");
       throw new Error(errorMessageFromBody(text, res.status));
     }
@@ -240,8 +198,6 @@ export const api = {
     return request<TaskListResponse>(`/api/tasks?${q}`);
   },
   task: (id: string) => request<TaskInfo>(`/api/tasks/${id}`),
-  chain: (taskId: string) =>
-    request<ChainEvent[]>(`/api/chain?task_id=${encodeURIComponent(taskId)}`),
   createTask: (data: {
     agent_id: string;
     prompt: string;
@@ -738,34 +694,14 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
-  superAiProvider: () => request<SuperAiProvider>("/api/super-ai/provider"),
-  superAiProviderUpdate: (body: SuperAiProviderUpdate) =>
-    request<SuperAiProvider>("/api/super-ai/provider", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    }),
-  pairClaim: (code: string) =>
-    request<DevicePairClaim>("/api/super-ai/device/pair/claim", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code }),
-    }),
 };
 
-export interface DevicePairClaim {
-  device_id: string;
-  name: string;
-  status: string;
-}
-
 export interface SuperAiPending {
-  action: "create_task" | "call_peer";
+  action: "create_task";
   prompt: string;
   agent_id: string;
   agent_name: string;
   runtime: "openclaw" | "hermes";
-  node_id?: string;
 }
 
 export interface SuperAiTurnRequest {
@@ -773,8 +709,6 @@ export interface SuperAiTurnRequest {
   workspace_slug: string;
   pending?: SuperAiPending | null;
   last_href?: string;
-  confirmation_id?: string;
-  session_id?: string;
 }
 
 export interface SuperAiTurnResponse {
@@ -784,23 +718,6 @@ export interface SuperAiTurnResponse {
   service: string;
   href: string;
   pending: SuperAiPending | null;
-  task_id?: string;
-  task_status?: string;
-  confirmation_id?: string;
-  dispatch?: boolean;
-}
-
-export interface SuperAiProvider {
-  base_url: string;
-  model: string;
-  api_key_set: boolean;
-  mock: boolean;
-}
-
-export interface SuperAiProviderUpdate {
-  base_url: string;
-  model: string;
-  api_key?: string;
 }
 
 export interface OfficeDriveBeat {

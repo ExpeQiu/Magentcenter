@@ -1,5 +1,4 @@
 import type { Metadata } from "next";
-import { EntryGate } from "@/components/auth/entry-gate";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -14,9 +13,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="zh-CN">
-      <body className="min-h-screen antialiased">
-        <EntryGate>{children}</EntryGate>
-      </body>
+      <body className="min-h-screen antialiased">{children}</body>
     </html>
   );
 }
