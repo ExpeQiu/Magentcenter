@@ -346,6 +346,21 @@ class OutboxRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class CommandAckRecord(Base):
+    """节点对一条命令的持久化确认。重放同一键返回同一结果。"""
+
+    __tablename__ = "command_acks"
+    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_command_ack"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    dedupe_key: Mapped[str] = mapped_column(String(160), default="")
+    node_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    delegation_id: Mapped[str] = mapped_column(String(36), default="")
+    attempt: Mapped[int] = mapped_column(Integer, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class EnrollmentVoucherRecord(Base):
     __tablename__ = "enrollment_vouchers"
 
@@ -410,6 +425,23 @@ class DeviceTaskLinkRecord(Base):
     device_id: Mapped[str] = mapped_column(String(64), index=True, default="")
     session_id: Mapped[str] = mapped_column(String(64), default="")
     task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class DevicePairRecord(Base):
+    """对话终端的一次性绑定。短码给人输入，轮询密文只给发起的那台设备。"""
+
+    __tablename__ = "device_pairs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    name: Mapped[str] = mapped_column(String(128), default="")
+    platform: Mapped[str] = mapped_column(String(32), default="esp32")
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True, default="")
+    poll_secret_hash: Mapped[str] = mapped_column(String(64), default="")
+    device_token: Mapped[str] = mapped_column(Text, default="")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 

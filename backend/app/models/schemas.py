@@ -240,11 +240,12 @@ class CreateAutopilotRequest(BaseModel):
 class SuperAiPending(BaseModel):
     """写操作确认单。前端原样带回，确认后才执行。"""
 
-    action: Literal["create_task"]
+    action: Literal["create_task", "call_peer"]
     prompt: str
     agent_id: str
     agent_name: str = ""
     runtime: Literal["openclaw", "hermes"] = "openclaw"
+    node_id: str = ""
 
 
 class SuperAiTurnRequest(BaseModel):
@@ -252,6 +253,8 @@ class SuperAiTurnRequest(BaseModel):
     workspace_slug: str = "cyber"
     pending: SuperAiPending | None = None
     last_href: str = ""
+    confirmation_id: str = ""
+    session_id: str = ""
 
 
 class SuperAiTurnResponse(BaseModel):
@@ -264,6 +267,13 @@ class SuperAiTurnResponse(BaseModel):
     task_id: str = ""
     task_status: str = ""
     confirmation_id: str = ""
+    dispatch: bool = False
+
+
+class SuperAiProviderUpdate(BaseModel):
+    base_url: str = ""
+    model: str = ""
+    api_key: str | None = None
 
 
 class DeviceEnrollRequest(BaseModel):
@@ -277,6 +287,43 @@ class DeviceEnrollResponse(BaseModel):
     device_id: str
     device_token: str
     name: str
+
+
+class DevicePairStartRequest(BaseModel):
+    device_id: str
+    name: str = ""
+    platform: Literal["esp32", "desktop"] = "esp32"
+
+
+class DevicePairStartResponse(BaseModel):
+    device_id: str
+    code: str
+    poll_secret: str
+    bind_path: str
+    expires_in: int
+
+
+class DevicePairStatusRequest(BaseModel):
+    device_id: str
+    poll_secret: str
+
+
+class DevicePairStatusResponse(BaseModel):
+    status: Literal["pending", "ready", "expired"]
+    device_id: str = ""
+    name: str = ""
+    device_token: str = ""
+    expires_in: int = 0
+
+
+class DevicePairClaimRequest(BaseModel):
+    code: str
+
+
+class DevicePairClaimResponse(BaseModel):
+    device_id: str
+    name: str
+    status: str
 
 
 class DeviceTurnRequest(BaseModel):

@@ -39,13 +39,14 @@ class AgentRegistry:
         self._cache_at: float = 0
         self._providers: dict[str, AgentProvider] = {}
 
-        for runtime in settings.enabled_runtimes():
-            if settings.ai_mock_mode:
-                self._providers[runtime] = MockAdapter(runtime=runtime)
-            elif runtime == "openclaw":
-                self._providers[runtime] = OpenClawAdapter(settings)
-            elif runtime == "hermes":
-                self._providers[runtime] = HermesAdapter(settings)
+        if settings.executors_enabled():
+            for runtime in settings.enabled_runtimes():
+                if settings.ai_mock_mode:
+                    self._providers[runtime] = MockAdapter(runtime=runtime)
+                elif runtime == "openclaw":
+                    self._providers[runtime] = OpenClawAdapter(settings)
+                elif runtime == "hermes":
+                    self._providers[runtime] = HermesAdapter(settings)
 
         logger.info(
             "agent registry providers=%s mock=%s",

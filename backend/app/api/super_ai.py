@@ -4,14 +4,31 @@ import logging
 
 from fastapi import APIRouter, Header, HTTPException, Request
 
-from app.core.device_channel import DeviceAuthError, device_task, device_turn, enroll_device
+from app.core.device_channel import (
+    DeviceAuthError,
+    DevicePairError,
+    claim_device_pair,
+    device_task,
+    device_turn,
+    enroll_device,
+    poll_device_pair,
+    start_device_pair,
+)
 from app.core.fleet import FleetAuthError, FleetError
 from app.core.super_ai import handle_turn
+from app.core import super_ai_llm
 from app.models.schemas import (
     DeviceEnrollRequest,
     DeviceEnrollResponse,
+    DevicePairClaimRequest,
+    DevicePairClaimResponse,
+    DevicePairStartRequest,
+    DevicePairStartResponse,
+    DevicePairStatusRequest,
+    DevicePairStatusResponse,
     DeviceTaskResponse,
     DeviceTurnRequest,
+    SuperAiProviderUpdate,
     SuperAiTurnRequest,
     SuperAiTurnResponse,
 )
@@ -19,6 +36,20 @@ from app.models.schemas import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/super-ai", tags=["super-ai"])
+
+
+@router.get("/provider")
+async def get_provider() -> dict:
+    return super_ai_llm.public_provider()
+
+
+@router.put("/provider")
+async def put_provider(req: SuperAiProviderUpdate) -> dict:
+    return super_ai_llm.save_provider(
+        base_url=req.base_url,
+        model=req.model,
+        api_key=req.api_key,
+    )
 
 
 @router.post("/turn", response_model=SuperAiTurnResponse)
@@ -31,6 +62,8 @@ async def turn(req: SuperAiTurnRequest, request: Request) -> SuperAiTurnResponse
         registry=request.app.state.registry,
         task_manager=request.app.state.task_manager,
         monitor=request.app.state.monitor,
+        confirmation_id=req.confirmation_id,
+        session_id=req.session_id,
     )
     from app.core.chain import append_chain
 
@@ -48,6 +81,8 @@ async def turn(req: SuperAiTurnRequest, request: Request) -> SuperAiTurnResponse
             "service": result.service,
             "href": result.href,
             "pending_prompt": pending_prompt,
+            "session_id": req.session_id,
+            "dispatch": result.dispatch,
         },
     )
     return result
@@ -69,6 +104,43 @@ async def device_enroll(req: DeviceEnrollRequest, request: Request) -> DeviceEnr
     except FleetError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return DeviceEnrollResponse(**enrolled)
+
+
+@router.post("/device/pair", response_model=DevicePairStartResponse)
+async def device_pair_start(req: DevicePairStartRequest) -> DevicePairStartResponse:
+    try:
+        started = await start_device_pair(
+            device_id=req.device_id,
+            name=req.name,
+            platform=req.platform,
+        )
+    except DevicePairError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FleetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DevicePairStartResponse(**started)
+
+
+@router.post("/device/pair/status", response_model=DevicePairStatusResponse)
+async def device_pair_status(req: DevicePairStatusRequest) -> DevicePairStatusResponse:
+    try:
+        status = await poll_device_pair(req.device_id, req.poll_secret)
+    except DevicePairError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except DeviceAuthError as exc:
+        raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return DevicePairStatusResponse(**status)
+
+
+@router.post("/device/pair/claim", response_model=DevicePairClaimResponse)
+async def device_pair_claim(req: DevicePairClaimRequest) -> DevicePairClaimResponse:
+    try:
+        claimed = await claim_device_pair(req.code)
+    except DevicePairError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FleetError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DevicePairClaimResponse(**claimed)
 
 
 @router.post("/device/turn", response_model=SuperAiTurnResponse)

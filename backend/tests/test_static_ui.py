@@ -57,6 +57,15 @@ def test_legacy_prefix_redirects(tmp_path: Path):
     assert hit.location == "/cyber/tasks"
 
 
+def test_root_image_is_a_file(tmp_path: Path):
+    root = _layout(tmp_path)
+    (root / "super-ai-avatar.jpg").write_bytes(b"jpeg")
+    hit = resolve_static(root, "super-ai-avatar.jpg")
+    assert hit.kind == "file"
+    assert hit.path is not None
+    assert hit.path.name == "super-ai-avatar.jpg"
+
+
 def test_missing_asset_is_missing_not_home(tmp_path: Path):
     root = _layout(tmp_path)
     hit = resolve_static(root, "cyber/nope.txt")

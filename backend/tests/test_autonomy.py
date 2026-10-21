@@ -14,7 +14,10 @@ from app.core.autonomy_state import (
     reduce_outcome,
     task_status_v1,
 )
+from app.config import Settings
+from app.core.agent_registry import AgentRegistry
 from app.core.capabilities import catalog_for_profile
+from app.core import content_roots
 from app.core.capabilities import choose_node as choose_capability_node
 from app.core.confirmations import attach_task, bind_device_task, confirm, device_can_read, issue_confirmation
 from app.core.delegations import (
@@ -70,6 +73,22 @@ def test_identity_is_stable_and_alias_does_not_replace_it(tmp_path, monkeypatch)
     aliased = remember_alias("old-host")
     assert aliased.node_id == first.node_id
     assert "old-host" in aliased.aliases
+
+
+def test_cloud_profile_has_no_executors_or_personal_dirs(monkeypatch, tmp_path):
+    monkeypatch.setenv("AGENTCENTER_DATA_DIR", str(tmp_path))
+    monkeypatch.setattr(content_roots, "_load", lambda: {})
+    monkeypatch.setattr(content_roots, "_personal_defaults", lambda: False)
+    assert content_roots.wiki_dir() == ""
+    assert content_roots.skills_dir() == ""
+    assert content_roots.outputs_dir() == ""
+    snap = content_roots.snapshot()
+    assert snap["knowledge_wiki_dir"] == ""
+    assert snap["knowledge_default"] == ""
+    settings = Settings(deploy_profile="cloud", local_executor_scan="auto", ai_mock_mode=True)
+    registry = AgentRegistry(settings)
+    assert settings.execution_slots() == 0
+    assert registry._providers == {}
 
 
 def test_profile_catalog_and_node_choice():
@@ -394,6 +413,207 @@ def test_conversation_role_cannot_claim(db):
                 ClaimRequest(task_id="t", attempt=1),
                 x_node_token=enrolled["node_token"],
             )
+
+    asyncio.run(scenario())
+
+
+def test_claim_requires_assignment_and_ack_is_persisted(db):
+    async def scenario():
+        from datetime import datetime, timedelta
+
+        from fastapi import HTTPException
+
+        from app.api.v2 import ack_command
+        from app.core.sync_bus import dispatch_pending, pending_outbox
+        from app.models.db import CommandAckRecord, DelegationRecord, ExecutionRecord, OutboxRecord
+
+        await create_tables()
+        ident = load_or_create_identity()
+
+        async def enroll(node_id: str) -> dict:
+            voucher = await create_enrollment(
+                type("Req", (), {"role": "edge", "uses": 1, "ttl_seconds": 60})()
+            )
+            return await enroll_node(
+                type(
+                    "Enroll",
+                    (),
+                    {"voucher": voucher["voucher"], "node_id": node_id, "protocol_version": 2},
+                )()
+            )
+
+        node_a = await enroll("node-a")
+        node_b = await enroll("node-b")
+        factory = get_session_factory()
+        async with factory() as session:
+            session.add(
+                TaskRecord(
+                    id="task-a",
+                    agent_id="main",
+                    prompt="ship",
+                    status="queued",
+                    node_id="node-a",
+                    owner_center_id=ident.center_id,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            await session.commit()
+
+        with pytest.raises(HTTPException) as denied:
+            await claim_command(
+                ClaimRequest(task_id="task-a", attempt=1),
+                x_node_token=node_b["node_token"],
+            )
+        assert denied.value.status_code == 403
+        with pytest.raises(HTTPException) as missing:
+            await claim_command(
+                ClaimRequest(task_id="missing", attempt=1),
+                x_node_token=node_a["node_token"],
+            )
+        assert missing.value.status_code == 404
+        with pytest.raises(HTTPException) as wrong_attempt:
+            await claim_command(
+                ClaimRequest(task_id="task-a", attempt=2),
+                x_node_token=node_a["node_token"],
+            )
+        assert wrong_attempt.value.status_code == 409
+
+        first = await claim_command(
+            ClaimRequest(task_id="task-a", attempt=1),
+            x_node_token=node_a["node_token"],
+        )
+        again = await claim_command(
+            ClaimRequest(task_id="task-a", attempt=1),
+            x_node_token=node_a["node_token"],
+        )
+        assert first["accepted"] is True
+        assert again["accepted"] is False
+        assert again["status"] == "duplicate"
+        assert again["attempt"] == 1
+
+        created = await create_delegation(
+            owner_center_id=ident.center_id,
+            task_id="task-a",
+            target_node_id="node-a",
+            idempotency_key="step-claim",
+            payload={"prompt": "ship", "visibility": "shared"},
+            source_node_id="node-a",
+            target_center_id=ident.center_id,
+            local_workspace_id="local-ws",
+            remote_workspace_id="remote-ws",
+            visibility="shared",
+        )
+        with pytest.raises(HTTPException) as unlinked:
+            await claim_command(
+                ClaimRequest(delegation_id=created["delegation_id"], attempt=1),
+                x_node_token=node_a["node_token"],
+            )
+        assert unlinked.value.status_code == 403
+        await link_workspaces("local-ws", ident.center_id, "remote-ws")
+        async with factory() as session:
+            row = await session.get(DelegationRecord, created["delegation_id"])
+            row.created_at = datetime.utcnow() - timedelta(hours=25)
+            await session.commit()
+        with pytest.raises(HTTPException) as expired:
+            await claim_command(
+                ClaimRequest(delegation_id=created["delegation_id"], attempt=1),
+                x_node_token=node_a["node_token"],
+            )
+        assert expired.value.status_code == 409
+        async with factory() as session:
+            row = await session.get(DelegationRecord, created["delegation_id"])
+            row.created_at = datetime.utcnow()
+            await session.commit()
+        delegated = await claim_command(
+            ClaimRequest(delegation_id=created["delegation_id"], task_id="task-a", attempt=1),
+            x_node_token=node_a["node_token"],
+        )
+        assert delegated["accepted"] is True
+
+        acked = await ack_command(
+            ClaimRequest(task_id="task-a", attempt=1),
+            x_node_token=node_a["node_token"],
+        )
+        replayed = await ack_command(
+            ClaimRequest(task_id="task-a", attempt=1),
+            x_node_token=node_a["node_token"],
+        )
+        assert acked == replayed
+        assert acked["means"] == "persisted"
+        async with factory() as session:
+            rows = (await session.execute(select(CommandAckRecord))).scalars().all()
+            assert len(rows) == 1
+            executions = (
+                await session.execute(select(ExecutionRecord).where(ExecutionRecord.node_id == "node-b"))
+            ).scalars().all()
+            assert executions == []
+
+        finished = await ingest(
+            {
+                "protocol_version": 2,
+                "message_id": "result-ok",
+                "type": "execution.completed",
+                "source_node_id": "node-a",
+                "task_id": "task-a",
+                "attempt": 1,
+                "payload": {"visibility": "shared", "output": "done", "status": "completed"},
+            },
+            authenticated_node_id="node-a",
+        )
+        assert finished["applied"] == "applied"
+        kept = await ingest(
+            {
+                "protocol_version": 2,
+                "message_id": "result-late",
+                "type": "execution.failed",
+                "source_node_id": "node-a",
+                "task_id": "task-a",
+                "attempt": 2,
+                "payload": {"visibility": "shared", "status": "failed", "error": "late"},
+            },
+            authenticated_node_id="node-a",
+        )
+        assert kept["applied"] == "kept"
+        with pytest.raises(SyncConflict):
+            await ingest(
+                {
+                    "protocol_version": 2,
+                    "message_id": "result-b",
+                    "type": "execution.completed",
+                    "source_node_id": "node-b",
+                    "task_id": "task-a",
+                    "attempt": 3,
+                    "payload": {"visibility": "shared", "output": "stolen"},
+                },
+                authenticated_node_id="node-b",
+            )
+        async with factory() as session:
+            task = await session.get(TaskRecord, "task-a")
+            assert task.status == "completed"
+            assert task.output == "done"
+
+        remote = await create_delegation(
+            owner_center_id=ident.center_id,
+            task_id="task-a",
+            target_node_id="node-a",
+            idempotency_key="remote-step",
+            payload={"prompt": "ship", "visibility": "shared"},
+            source_node_id="node-a",
+            target_center_id="remote-center",
+            visibility="shared",
+        )
+        assert remote["delegation_id"]
+        waiting = await dispatch_pending()
+        assert waiting["waiting"] >= 1
+        assert waiting["acked"] >= 1
+        async with factory() as session:
+            rows = (await session.execute(select(OutboxRecord))).scalars().all()
+            remote_rows = [row for row in rows if "remote-center" in (row.payload_json or "")]
+            local_rows = [row for row in rows if ident.center_id in (row.payload_json or "")]
+            assert remote_rows and remote_rows[0].acked == 0 and remote_rows[0].attempts >= 1
+            assert any(row.acked == 1 for row in local_rows)
+        assert await pending_outbox()
 
     asyncio.run(scenario())
 

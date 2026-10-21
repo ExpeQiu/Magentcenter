@@ -89,6 +89,12 @@ def resolve_static(root: Path, full_path: str, query: str = "") -> StaticResolve
         dest = f"/{parts[0]}/{parts[1]}/detail?id={quote(parts[2])}"
         return StaticResolve(kind="redirect", location=dest)
 
+    # 根目录上的图片等静态文件，不要当成工作区 slug。
+    if _looks_asset(cleaned):
+        asset = _file_for(root, cleaned)
+        if asset is not None:
+            return StaticResolve(kind="file", path=asset)
+
     # 未知工作区 slug（如 cookie=expe）改写到默认工作区，避免首页死循环
     if parts and parts[0] not in slugs and parts[0] not in _SKIP_SLUG_DIRS:
         rest = parts[1:]

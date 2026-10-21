@@ -78,20 +78,39 @@ def _settings_value(field: str, fallback: str) -> str:
     return raw or fallback
 
 
+def _personal_defaults() -> bool:
+    """云端协调器不回落到本机个人目录。"""
+    from app.config import get_settings
+
+    return get_settings().normalized_profile() != "cloud"
+
+
 def wiki_dir() -> str:
     saved = _load().get("knowledge_wiki_dir") or ""
-    return saved or _settings_value("knowledge_wiki_dir", DEFAULT_WIKI_DIR)
+    if saved:
+        return saved
+    if not _personal_defaults():
+        return ""
+    return _settings_value("knowledge_wiki_dir", DEFAULT_WIKI_DIR)
 
 
 def skills_dir() -> str:
     saved = _load().get("skills_catalog_dir") or ""
-    return saved or _settings_value("skills_catalog_dir", DEFAULT_SKILLS_DIR)
+    if saved:
+        return saved
+    if not _personal_defaults():
+        return ""
+    return _settings_value("skills_catalog_dir", DEFAULT_SKILLS_DIR)
 
 
 def outputs_dir() -> str:
     saved = _load().get("outputs_vault_dir") or ""
+    if not saved and not _personal_defaults():
+        return ""
     raw = saved or _settings_value("outputs_vault_root", DEFAULT_OUTPUTS_DIR)
     text = raw.strip().strip('"').strip("'").replace("\\ ", " ").replace("\\~", "~")
+    if not text:
+        return ""
     return str(Path(text).expanduser())
 
 
@@ -116,6 +135,8 @@ def _count_files(root: Path, *, suffix: str = "", name: str = "") -> int:
 
 
 def describe(path: str, *, suffix: str = "", name: str = "") -> dict[str, Any]:
+    if not (path or "").strip():
+        return {"path": "", "exists": False, "file_count": 0}
     root = Path(path).expanduser()
     exists = root.is_dir()
     file_count = 0
@@ -138,9 +159,9 @@ def snapshot() -> dict[str, Any]:
         "knowledge_wiki_dir": wiki,
         "skills_catalog_dir": skills,
         "outputs_vault_dir": outputs,
-        "knowledge_default": DEFAULT_WIKI_DIR,
-        "skills_default": DEFAULT_SKILLS_DIR,
-        "outputs_default": str(Path(DEFAULT_OUTPUTS_DIR).expanduser()),
+        "knowledge_default": DEFAULT_WIKI_DIR if _personal_defaults() else "",
+        "skills_default": DEFAULT_SKILLS_DIR if _personal_defaults() else "",
+        "outputs_default": str(Path(DEFAULT_OUTPUTS_DIR).expanduser()) if _personal_defaults() else "",
         "knowledge": describe(wiki, suffix=".md"),
         "skills": describe(skills, name="SKILL.md"),
         "outputs": describe(outputs, suffix=".md"),

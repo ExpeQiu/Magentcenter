@@ -36,10 +36,20 @@ class EdgeStore:
                 CREATE TABLE IF NOT EXISTS outbox (
                     task_id TEXT PRIMARY KEY,
                     result_json TEXT NOT NULL,
-                    acked INTEGER NOT NULL DEFAULT 0
+                    acked INTEGER NOT NULL DEFAULT 0,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    rejected INTEGER NOT NULL DEFAULT 0
                 )
                 """
             )
+            columns = {row[1] for row in conn.execute("PRAGMA table_info(outbox)")}
+            if "attempts" not in columns:
+                conn.execute("ALTER TABLE outbox ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0")
+            if "last_error" not in columns:
+                conn.execute("ALTER TABLE outbox ADD COLUMN last_error TEXT NOT NULL DEFAULT ''")
+            if "rejected" not in columns:
+                conn.execute("ALTER TABLE outbox ADD COLUMN rejected INTEGER NOT NULL DEFAULT 0")
 
     def begin(self, task_id: str, attempt: int = 1) -> bool:
         key = f"{task_id}:{attempt}"
@@ -58,8 +68,14 @@ class EdgeStore:
         with self._connect() as conn:
             conn.execute(
                 """
-                INSERT INTO outbox (task_id, result_json, acked) VALUES (?, ?, 0)
-                ON CONFLICT(task_id) DO UPDATE SET result_json=excluded.result_json, acked=0
+                INSERT INTO outbox (task_id, result_json, acked, attempts, last_error, rejected)
+                VALUES (?, ?, 0, 0, '', 0)
+                ON CONFLICT(task_id) DO UPDATE SET
+                    result_json=excluded.result_json,
+                    acked=0,
+                    attempts=0,
+                    last_error='',
+                    rejected=0
                 """,
                 (task_id, raw),
             )
@@ -71,9 +87,38 @@ class EdgeStore:
     def pending(self) -> list[dict]:
         with self._connect() as conn:
             rows = conn.execute(
-                "SELECT task_id, result_json FROM outbox WHERE acked=0"
+                "SELECT task_id, result_json, attempts, last_error FROM outbox WHERE acked=0 AND rejected=0"
             ).fetchall()
         items = []
         for row in rows:
-            items.append({"task_id": row["task_id"], "result": json.loads(row["result_json"])})
+            items.append(
+                {
+                    "task_id": row["task_id"],
+                    "result": json.loads(row["result_json"]),
+                    "attempts": int(row["attempts"] or 0),
+                    "last_error": row["last_error"] or "",
+                }
+            )
         return items
+
+    def note_error(self, task_id: str, error: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET attempts = attempts + 1, last_error = ?
+                WHERE task_id = ? AND acked = 0 AND rejected = 0
+                """,
+                ((error or "")[:500], task_id),
+            )
+
+    def mark_rejected(self, task_id: str, error: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                UPDATE outbox
+                SET rejected = 1, attempts = attempts + 1, last_error = ?
+                WHERE task_id = ?
+                """,
+                ((error or "")[:500], task_id),
+            )

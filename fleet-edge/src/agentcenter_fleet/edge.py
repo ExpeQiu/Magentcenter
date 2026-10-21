@@ -21,6 +21,7 @@ import json
 import logging
 import os
 import platform
+import random
 import re
 import secrets
 import shutil
@@ -35,6 +36,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 logger = logging.getLogger("fleet-edge")
+_RESULT_LOCK = threading.Lock()
+_PERMANENT_HTTP = {400, 403, 404, 409}
+
+
+class FinishRejected(RuntimeError):
+    def __init__(self, code: int):
+        self.code = code
+        super().__init__(f"finish rejected http {code}")
 
 
 def _env(name: str, default: str = "") -> str:
@@ -144,7 +153,12 @@ class Cloud:
         return data.get("task")
 
     def finish(self, task_id: str, body: dict) -> None:
-        self._request("POST", f"/api/fleet/tasks/{task_id}/finish", body, auth=True)
+        try:
+            self._request("POST", f"/api/fleet/tasks/{task_id}/finish", body, auth=True)
+        except urllib.error.HTTPError as exc:
+            if exc.code in _PERMANENT_HTTP:
+                raise FinishRejected(exc.code) from exc
+            raise
 
 
 def slug_node_id(hostname: str) -> str:
@@ -385,28 +399,65 @@ def run_local(task: dict, mock: bool) -> dict:
     return last
 
 
+def deliver_result(cloud: Cloud, store, task_id: str, result: dict) -> bool:
+    """回传一条已落盘的结果。网络错误留下次补发，业务拒绝不再重试。"""
+    with _RESULT_LOCK:
+        try:
+            cloud.finish(task_id, result)
+        except FinishRejected as exc:
+            store.mark_rejected(task_id, f"http {exc.code}")
+            logger.error("result rejected task=%s code=%s", task_id, exc.code)
+            return False
+        except Exception as exc:
+            store.note_error(task_id, type(exc).__name__)
+            logger.exception("result delivery waiting task=%s", task_id)
+            return False
+        store.ack(task_id)
+        logger.info("result delivered task=%s status=%s", task_id, result.get("status"))
+        return True
+
+
+def flush_pending(cloud: Cloud, store) -> tuple[int, int]:
+    sent = 0
+    held = 0
+    for item in store.pending():
+        if deliver_result(cloud, store, item["task_id"], item["result"]):
+            sent += 1
+        elif store.pending() and any(row["task_id"] == item["task_id"] for row in store.pending()):
+            held += 1
+    if sent or held:
+        logger.info("result flush sent=%s held=%s", sent, held)
+    return sent, held
+
+
+def result_retry_loop(cloud: Cloud, stop: threading.Event) -> None:
+    delay = 2.0
+    while not stop.is_set():
+        held = 0
+        try:
+            _sent, held = flush_pending(cloud, get_store())
+        except Exception:
+            logger.exception("result retry loop failed")
+            held = 1
+        delay = min(60.0, max(2.0, delay * 2)) if held else 2.0
+        jitter = random.uniform(0, delay * 0.25)
+        if stop.wait(delay + jitter):
+            logger.info("result retry stopped")
+            return
+
+
 def execute_and_finish(cloud: Cloud, task: dict, mock: bool) -> None:
     store = get_store()
     attempt = int(task.get("attempt") or 1)
     if not store.begin(task["id"], attempt):
         logger.info("duplicate execution skipped task=%s attempt=%s", task.get("id"), attempt)
         for item in store.pending():
-            if item["task_id"] != task["id"]:
-                continue
-            try:
-                cloud.finish(task["id"], item["result"])
-                store.ack(task["id"])
-            except Exception:
-                logger.exception("finish replay failed task=%s", task.get("id"))
+            if item["task_id"] == task["id"]:
+                deliver_result(cloud, store, task["id"], item["result"])
         return
     result = run_local(task, mock)
     store.save_result(task["id"], result)
-    try:
-        cloud.finish(task["id"], result)
-        store.ack(task["id"])
-        logger.info("reported task=%s status=%s", task["id"], result["status"])
-    except Exception:
-        logger.exception("finish failed task=%s", task.get("id"))
+    deliver_result(cloud, store, task["id"], result)
 
 
 def get_store() -> "EdgeStore":
@@ -554,13 +605,14 @@ def main() -> int:
             daemon=True,
         ).start()
 
-    for item in get_store().pending():
-        try:
-            cloud.finish(item["task_id"], item["result"])
-            get_store().ack(item["task_id"])
-            logger.info("replayed result task=%s", item["task_id"])
-        except Exception:
-            logger.exception("replay result failed task=%s", item["task_id"])
+    flush_pending(cloud, get_store())
+    stop_retry = threading.Event()
+    threading.Thread(
+        target=result_retry_loop,
+        args=(cloud, stop_retry),
+        name="fleet-result-retry",
+        daemon=True,
+    ).start()
 
     scan_box = {"at": time.time(), "agents": agents}
 

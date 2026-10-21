@@ -93,6 +93,9 @@ async def create_delegation(
     depth: int = 1,
     trace_id: str = "",
     visibility: str = "shared",
+    local_workspace_id: str = "",
+    remote_workspace_id: str = "",
+    attempt: int = 1,
 ) -> dict:
     if not depth_allowed(depth):
         raise DelegationError("delegation depth exceeded")
@@ -121,7 +124,17 @@ async def create_delegation(
             idempotency_key=idempotency_key,
             payload_hash=digest,
             payload_json=json.dumps(shared, ensure_ascii=False),
-            auth_snapshot_json=json.dumps({"visibility": visibility, "target": target_node_id}),
+            auth_snapshot_json=json.dumps(
+                {
+                    "visibility": visibility,
+                    "target": target_node_id,
+                    "attempt": max(1, int(attempt or 1)),
+                    "local_workspace_id": local_workspace_id or "",
+                    "remote_center_id": target_center_id or "",
+                    "remote_workspace_id": remote_workspace_id or "",
+                    "owner_center_id": owner_center_id,
+                }
+            ),
             delivery_status="pending",
             parent_task_ref=parent_task_ref,
             root_task_ref=root_task_ref or parent_task_ref or task_id,

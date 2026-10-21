@@ -96,7 +96,7 @@ async def append_chain(
                         select(ChainRecord)
                         .where(ChainRecord.actor_id == actor_id)
                         .where(ChainRecord.kind == "turn")
-                        .where(ChainRecord.intent == "create_task")
+                        .where(ChainRecord.intent.in_(("create_task", "dispatch")))
                         .where(ChainRecord.task_id == "")
                         .order_by(ChainRecord.id.desc())
                         .limit(1)

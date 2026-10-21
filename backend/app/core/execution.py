@@ -5,20 +5,37 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from app.core.autonomy_state import reduce_outcome
 from app.core.identity import load_or_create_identity
-from app.models.db import ExecutionRecord, TaskRecord, get_session_factory
+from app.models.db import (
+    CommandAckRecord,
+    DelegationRecord,
+    ExecutionRecord,
+    TaskRecord,
+    WorkspaceLinkRecord,
+    get_session_factory,
+)
 
 logger = logging.getLogger(__name__)
 
 _LIVE = {"accepted", "starting", "running"}
+_CLOSED_TASK = {"completed", "failed", "cancelled", "timeout", "succeeded"}
+_TERMINAL_EXECUTION = {"succeeded", "failed", "stopped"}
+CLAIM_TTL = timedelta(hours=24)
+
+
+class ClaimError(ValueError):
+    def __init__(self, detail: str, status_code: int = 403):
+        self.status_code = status_code
+        super().__init__(detail)
 
 
 def _now() -> datetime:
@@ -97,6 +114,258 @@ async def accept_remote(task_id: str, node_id: str, attempt: int = 1, delegation
             )
             return False
     return True
+
+
+def _dedupe_key(task_id: str, delegation_id: str, attempt: int) -> str:
+    return f"remote:{delegation_id or task_id}:{attempt}"
+
+
+def _ack_key(node_id: str, task_id: str, delegation_id: str, attempt: int) -> str:
+    return f"ack:{node_id}:{delegation_id or task_id}:{attempt}"
+
+
+async def _execution_by_key(session, key: str) -> ExecutionRecord | None:
+    return (
+        await session.execute(select(ExecutionRecord).where(ExecutionRecord.dedupe_key == key))
+    ).scalar_one_or_none()
+
+
+async def _authorize_claim(
+    session,
+    *,
+    node_id: str,
+    task_id: str,
+    delegation_id: str,
+    attempt: int,
+) -> tuple[TaskRecord | None, DelegationRecord | None, ExecutionRecord | None]:
+    """在调用方的事务里核对目标节点、拥有者、工作区、attempt 和过期。"""
+    if attempt < 1:
+        raise ClaimError("attempt mismatch", 409)
+    ident = load_or_create_identity()
+    delegation = None
+    if delegation_id:
+        delegation = await session.get(DelegationRecord, delegation_id)
+        if delegation is None:
+            raise ClaimError("delegation not found", 404)
+        if delegation.target_node_id != node_id:
+            raise ClaimError("delegation is assigned to another node", 403)
+        if delegation.owner_center_id and delegation.owner_center_id != ident.center_id:
+            raise ClaimError("delegation owner mismatch", 403)
+        if task_id and delegation.task_id and delegation.task_id != task_id:
+            raise ClaimError("task does not match delegation", 409)
+        task_id = task_id or delegation.task_id
+        snapshot = {}
+        try:
+            snapshot = json.loads(delegation.auth_snapshot_json or "{}")
+        except json.JSONDecodeError:
+            snapshot = {}
+        expected = int(snapshot.get("attempt") or 1)
+        if attempt != expected:
+            raise ClaimError("attempt mismatch", 409)
+        local_ws = str(snapshot.get("local_workspace_id") or "")
+        remote_ws = str(snapshot.get("remote_workspace_id") or "")
+        remote_center = str(snapshot.get("remote_center_id") or "")
+        if local_ws or remote_ws:
+            if not (local_ws and remote_ws and remote_center):
+                raise ClaimError("workspace is not linked", 403)
+            link = (
+                await session.execute(
+                    select(WorkspaceLinkRecord).where(
+                        WorkspaceLinkRecord.local_workspace_id == local_ws,
+                        WorkspaceLinkRecord.remote_center_id == remote_center,
+                        WorkspaceLinkRecord.remote_workspace_id == remote_ws,
+                    )
+                )
+            ).scalar_one_or_none()
+            if link is None:
+                raise ClaimError("workspace is not linked", 403)
+    task = await session.get(TaskRecord, task_id) if task_id else None
+    if delegation is None and task is None:
+        raise ClaimError("task not found", 404)
+    if delegation is not None and delegation.task_id and task is None:
+        raise ClaimError("task not found", 404)
+    if task is not None:
+        if (task.node_id or "") != node_id and delegation is None:
+            raise ClaimError("task is assigned to another node", 403)
+        if task.node_id and task.node_id != node_id:
+            raise ClaimError("task is assigned to another node", 403)
+        if task.owner_center_id and task.owner_center_id != ident.center_id:
+            raise ClaimError("task owner mismatch", 403)
+        if delegation is None and attempt != 1:
+            raise ClaimError("attempt mismatch", 409)
+    existing = await _execution_by_key(session, _dedupe_key(task_id, delegation_id, attempt))
+    if existing is not None and existing.node_id != node_id:
+        raise ClaimError("execution belongs to another node", 403)
+    expired = False
+    if delegation is not None and delegation.created_at and delegation.created_at < _now() - CLAIM_TTL:
+        expired = True
+    if task is not None and task.status in _CLOSED_TASK and existing is None:
+        raise ClaimError("command is closed", 409)
+    if expired and existing is None:
+        raise ClaimError("command expired", 409)
+    return task, delegation, existing
+
+
+async def claim_assigned(
+    node_id: str,
+    *,
+    task_id: str = "",
+    delegation_id: str = "",
+    attempt: int = 1,
+) -> dict:
+    """核对命令归属后，在同一事务里领取。重放返回同一次结果。"""
+    if not task_id and not delegation_id:
+        raise ClaimError("task_id or delegation_id required", 400)
+    ident = load_or_create_identity()
+    factory = get_session_factory()
+    async with factory() as session:
+        task, delegation, existing = await _authorize_claim(
+            session,
+            node_id=node_id,
+            task_id=task_id,
+            delegation_id=delegation_id,
+            attempt=attempt,
+        )
+        resolved_task = task.id if task is not None else (delegation.task_id if delegation else task_id)
+        resolved_delegation = delegation.id if delegation is not None else delegation_id
+        if existing is not None:
+            logger.info(
+                "command claim replay node_id=%s task_id=%s delegation_id=%s attempt=%s",
+                node_id,
+                resolved_task,
+                resolved_delegation,
+                attempt,
+            )
+            return {
+                "accepted": False,
+                "task_id": resolved_task,
+                "delegation_id": resolved_delegation,
+                "attempt": attempt,
+                "status": "duplicate",
+            }
+        session.add(
+            ExecutionRecord(
+                id=str(uuid.uuid4()),
+                task_id=resolved_task,
+                owner_center_id=ident.center_id,
+                delegation_id=resolved_delegation,
+                node_id=node_id,
+                attempt=attempt,
+                dedupe_key=_dedupe_key(resolved_task, resolved_delegation, attempt),
+                status="accepted",
+            )
+        )
+        if delegation is not None and delegation.delivery_status == "pending":
+            delegation.delivery_status = "acknowledged"
+            delegation.updated_at = _now()
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+            logger.info(
+                "command claim duplicate node_id=%s task_id=%s attempt=%s",
+                node_id,
+                resolved_task,
+                attempt,
+            )
+            return {
+                "accepted": False,
+                "task_id": resolved_task,
+                "delegation_id": resolved_delegation,
+                "attempt": attempt,
+                "status": "duplicate",
+            }
+    logger.info(
+        "command claim accepted node_id=%s task_id=%s delegation_id=%s attempt=%s",
+        node_id,
+        resolved_task,
+        resolved_delegation,
+        attempt,
+    )
+    return {
+        "accepted": True,
+        "task_id": resolved_task,
+        "delegation_id": resolved_delegation,
+        "attempt": attempt,
+        "status": "accepted",
+    }
+
+
+async def _command_completed(session, task: TaskRecord | None, delegation_id: str, attempt: int) -> bool:
+    if task is not None and task.status in _CLOSED_TASK:
+        return True
+    task_id = task.id if task is not None else ""
+    existing = await _execution_by_key(session, _dedupe_key(task_id, delegation_id, attempt))
+    return bool(existing and existing.status in _TERMINAL_EXECUTION)
+
+
+async def record_command_ack(
+    node_id: str,
+    *,
+    task_id: str = "",
+    delegation_id: str = "",
+    attempt: int = 1,
+) -> dict:
+    """持久化命令确认。同一节点对同一命令的重放返回同一结果。"""
+    factory = get_session_factory()
+    key = _ack_key(node_id, task_id, delegation_id, attempt)
+    async with factory() as session:
+        prior = (
+            await session.execute(select(CommandAckRecord).where(CommandAckRecord.dedupe_key == key))
+        ).scalar_one_or_none()
+        if prior is not None:
+            task = await session.get(TaskRecord, prior.task_id) if prior.task_id else None
+            completed = bool(task and task.status in _CLOSED_TASK)
+            logger.info(
+                "command ack replay node_id=%s task_id=%s attempt=%s completed=%s",
+                node_id,
+                prior.task_id,
+                attempt,
+                completed,
+            )
+            return {
+                "acked": True,
+                "node_id": node_id,
+                "means": "persisted",
+                "completed": completed,
+            }
+        task, _delegation, _existing = await _authorize_claim(
+            session,
+            node_id=node_id,
+            task_id=task_id,
+            delegation_id=delegation_id,
+            attempt=attempt,
+        )
+        resolved_task = task.id if task is not None else task_id
+        completed = await _command_completed(session, task, delegation_id, attempt)
+        session.add(
+            CommandAckRecord(
+                id=str(uuid.uuid4()),
+                dedupe_key=key,
+                node_id=node_id,
+                task_id=resolved_task,
+                delegation_id=delegation_id,
+                attempt=attempt,
+            )
+        )
+        try:
+            await session.commit()
+        except IntegrityError:
+            await session.rollback()
+        logger.info(
+            "command ack persisted node_id=%s task_id=%s delegation_id=%s attempt=%s completed=%s",
+            node_id,
+            resolved_task,
+            delegation_id,
+            attempt,
+            completed,
+        )
+        return {
+            "acked": True,
+            "node_id": node_id,
+            "means": "persisted",
+            "completed": completed,
+        }
 
 
 async def current_execution(task_id: str) -> ExecutionRecord | None:

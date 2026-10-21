@@ -509,25 +509,14 @@ async def enroll(
     return {**info, "node_id": node_id, "node_token": token}
 
 
-async def enroll_voice(
-    *,
-    enroll_token: str,
-    expected_token: str,
+async def _store_voice_device(
     device_id: str,
-    name: str = "",
+    *,
+    name: str,
     hostname: str = "",
     platform: str = "esp32",
-) -> dict[str, str]:
-    """在场终端注册。不扫描智能体，也不领任务，只换一张设备令牌。"""
-    if not expected_token:
-        raise FleetAuthError("fleet enroll token is not configured")
-    if not hmac.compare_digest(enroll_token or "", expected_token):
-        logger.warning("voice enroll rejected device=%s", device_id)
-        raise FleetAuthError("invalid enroll token")
-    device_id = (device_id or "").strip().lower()
-    if not NODE_ID_RE.match(device_id):
-        raise FleetError("invalid device id")
-
+) -> str:
+    """签发语音终端令牌。只把哈希写入名册，明文交给调用方。"""
     token = secrets.token_urlsafe(32)
     factory = get_session_factory()
     async with factory() as session:
@@ -556,6 +545,34 @@ async def enroll_voice(
         rec.last_seen = _now()
         rec.updated_at = _now()
         await session.commit()
+    return token
+
+
+async def enroll_voice(
+    *,
+    enroll_token: str,
+    expected_token: str,
+    device_id: str,
+    name: str = "",
+    hostname: str = "",
+    platform: str = "esp32",
+) -> dict[str, str]:
+    """在场终端注册。不扫描智能体，也不领任务，只换一张设备令牌。"""
+    if not expected_token:
+        raise FleetAuthError("fleet enroll token is not configured")
+    if not hmac.compare_digest(enroll_token or "", expected_token):
+        logger.warning("voice enroll rejected device=%s", device_id)
+        raise FleetAuthError("invalid enroll token")
+    device_id = (device_id or "").strip().lower()
+    if not NODE_ID_RE.match(device_id):
+        raise FleetError("invalid device id")
+
+    token = await _store_voice_device(
+        device_id,
+        name=name or device_id,
+        hostname=hostname,
+        platform=platform,
+    )
     logger.info("voice device enrolled device=%s name=%s", device_id, name or device_id)
     from app.core.chain import append_chain
 

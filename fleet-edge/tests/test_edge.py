@@ -72,6 +72,44 @@ def test_call_agent_posts_other_endpoint():
     assert result["kind"] == "subagent"
 
 
+def test_flush_retries_network_failure_and_stops_on_reject(tmp_path):
+    import urllib.error
+
+    from agentcenter_fleet.edge import FinishRejected, flush_pending
+    from agentcenter_fleet.store import EdgeStore
+
+    store = EdgeStore(tmp_path / "edge.db")
+    store.save_result("task-1", {"status": "completed", "output": "ok"})
+
+    class Flaky:
+        def __init__(self):
+            self.calls = 0
+
+        def finish(self, task_id, body):
+            self.calls += 1
+            assert body["output"] == "ok"
+            if self.calls == 1:
+                raise urllib.error.URLError("down")
+
+    cloud = Flaky()
+    sent, held = flush_pending(cloud, store)
+    assert (sent, held) == (0, 1)
+    assert store.pending()[0]["attempts"] == 1
+    sent, held = flush_pending(cloud, store)
+    assert (sent, held) == (1, 0)
+    assert store.pending() == []
+
+    store.save_result("task-2", {"status": "failed", "output": ""})
+
+    class Reject:
+        def finish(self, task_id, body):
+            raise FinishRejected(409)
+
+    sent, held = flush_pending(Reject(), store)
+    assert (sent, held) == (0, 0)
+    assert store.pending() == []
+
+
 def test_openclaw_json_entries():
     raw = json.dumps({"agents": [{"id": "main", "name": "指挥", "model": "gpt"}]})
     found = _agents_from_openclaw_text(raw)

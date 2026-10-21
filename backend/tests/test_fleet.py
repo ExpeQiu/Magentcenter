@@ -683,6 +683,45 @@ def test_default_terminal_matches_host_not_cloud():
     assert winner == "expedemac-mini"
 
 
+def test_finish_does_not_overwrite_terminal_result(db):
+    async def scenario():
+        await create_tables()
+        enrolled = await fleet.enroll(
+            enroll_token="secret",
+            expected_token="secret",
+            node_id="pi",
+            name="树莓派",
+            agents=[{"id": "default", "name": "Hermes/default", "runtime": "hermes"}],
+        )
+        factory = get_session_factory()
+        async with factory() as session:
+            session.add(
+                TaskRecord(
+                    id="task-finish",
+                    agent_id="default",
+                    runtime="hermes",
+                    prompt="ping",
+                    status="running",
+                    node_id="pi",
+                    output="",
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            await session.commit()
+        done = await fleet.finish(enrolled["node_token"], "task-finish", status="completed", output="ok")
+        assert done["output"] == "ok"
+        with pytest.raises(fleet.FleetError):
+            await fleet.finish(enrolled["node_token"], "task-finish", status="failed", output="no")
+        replay = await fleet.finish(
+            enrolled["node_token"], "task-finish", status="completed", output="other"
+        )
+        assert replay["status"] == "completed"
+        assert replay["output"] == "ok"
+
+    asyncio.run(scenario())
+
+
 def test_default_terminal_matches_ip():
     ident = {
         "hostname": "box.local",

@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
-# 把本机 iCloud 的 WaytoAI 同步到云端项目目录。
-# 知识库读 WaytoAI/personalwiki，技能读 WaytoAI/skills。
-# 不上传 node_modules、构建产物和缓存。
+# 可选的人工镜像：把本机 WaytoAI 拷到另一台机器。
+# 不属于云端协调器（DEPLOY_PROFILE=cloud）。不要 --install 进云端注册流程，
+# 也不要把目标目录写进云端 content_roots.json。
 # 日志：logs/sync-waytoai.log
-# 安装每 15 分钟一次：./scripts/sync-waytoai.sh --install
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -152,50 +151,8 @@ sync_one() {
   fi
 }
 
-bind_roots() {
-"${SSH[@]}" "$REMOTE" "DEST='$DEST' python3 -" <<'PY'
-import json
-from pathlib import Path
-import os
-
-dest = Path(os.environ["DEST"])
-path = Path("/opt/agentcenter/data/content_roots.json")
-data = {}
-if path.is_file():
-    try:
-        loaded = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(loaded, dict):
-            data = {k: v for k, v in loaded.items() if isinstance(v, str)}
-    except (OSError, json.JSONDecodeError) as exc:
-        print(f"content roots unreadable err={exc}")
-
-def mac_path(value: str) -> bool:
-    return (not value) or value.startswith("/Users/") or "CloudDocs/WaytoAI" in value
-
-wiki = str(dest / "personalwiki")
-skills = str(dest / "skills")
-changed = False
-if mac_path(data.get("knowledge_wiki_dir", "")):
-    data["knowledge_wiki_dir"] = wiki
-    changed = True
-if mac_path(data.get("skills_catalog_dir", "")):
-    data["skills_catalog_dir"] = skills
-    changed = True
-if changed:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"content roots bound wiki={wiki} skills={skills}")
-else:
-    print("content roots kept")
-skill_count = sum(1 for p in (dest / "skills").rglob("SKILL.md") if "node_modules" not in p.parts)
-wiki_count = sum(1 for p in (dest / "personalwiki").rglob("*.md")) if (dest / "personalwiki").is_dir() else 0
-print(f"remote skills={skill_count} wiki_md={wiki_count}")
-PY
-}
-
 sync_docs personalwiki
 sync_docs skills
-bind_roots
 sync_one personalwiki
 sync_one skills
 while IFS= read -r name; do

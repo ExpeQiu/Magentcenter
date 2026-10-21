@@ -3,6 +3,7 @@
 import os
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.core.content_roots import DEFAULT_OUTPUTS_DIR, DEFAULT_SKILLS_DIR, DEFAULT_WIKI_DIR
@@ -26,7 +27,14 @@ class Settings(BaseSettings):
     local_executor_scan: str = "auto"
     cloud_connector: str = "auto"
     local_auth_enabled: bool = True
+    # 控制台进入鉴权码。空值在启动时生成实例独有口令，不使用源码里的固定值。
+    entry_code: str = ""
     admin_token: str = ""
+
+    @field_validator("entry_code", mode="before")
+    @classmethod
+    def keep_entry_code(cls, value: object) -> str:
+        return str(value or "").strip()
     min_free_mb: int = 64
 
     # 双运行时：openclaw,hermes

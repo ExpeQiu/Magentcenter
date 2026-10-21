@@ -16,7 +16,7 @@ from app.core.autonomy_state import PROTOCOL_VERSION, ProtocolError, accept_prot
 from app.core.capabilities import catalog_for_profile
 from app.core.confirmations import ConfirmationError, attach_task, confirm as confirm_record
 from app.core.delegations import DelegationError, create_delegation
-from app.core.execution import accept_remote
+from app.core.execution import ClaimError, claim_assigned, record_command_ack
 from app.core.identity import load_or_create_identity
 from app.core.observability import snapshot
 from app.core.sync_bus import SyncConflict, ingest
@@ -54,7 +54,14 @@ def openapi_document() -> dict:
     ]
     return {
         "openapi": "3.0.3",
-        "info": {"title": "AgentCenter Autonomy", "version": "2.0.0"},
+        "info": {
+            "title": "AgentCenter Autonomy",
+            "version": "2.0.0",
+            "description": (
+                "实验协议。设备连接器的生产路径仍是 /api/fleet 的领取与回写；"
+                "v2 outbox 只在目标是本中心时应用并确认，跨中心投递尚未闭环。"
+            ),
+        },
         "paths": {path: {"post": {"summary": path}} for path in paths},
         "x-protocol-version": PROTOCOL_VERSION,
     }
@@ -249,6 +256,9 @@ async def post_delegation(
             payload=req.payload,
             source_node_id=node.node_id,
             target_center_id=req.remote_center_id or ident.center_id,
+            local_workspace_id=req.local_workspace_id,
+            remote_workspace_id=req.remote_workspace_id,
+            attempt=int(req.payload.get("attempt") or 1),
             parent_task_ref=req.parent_task_ref,
             ancestors=req.ancestors,
             depth=req.depth,
@@ -271,26 +281,25 @@ async def claim_command(
         raise HTTPException(status_code=403, detail="role cannot claim executions")
     if not req.task_id and not req.delegation_id:
         raise HTTPException(status_code=400, detail="task_id or delegation_id required")
-    fresh = await accept_remote(
-        req.task_id or req.delegation_id,
-        node.node_id,
-        attempt=req.attempt,
-        delegation_id=req.delegation_id,
-    )
-    logger.info(
-        "command claim node_id=%s task_id=%s attempt=%s fresh=%s",
-        node.node_id,
-        req.task_id,
-        req.attempt,
-        fresh,
-    )
-    return {
-        "accepted": fresh,
-        "task_id": req.task_id,
-        "delegation_id": req.delegation_id,
-        "attempt": req.attempt,
-        "status": "accepted" if fresh else "duplicate",
-    }
+    try:
+        claimed = await claim_assigned(
+            node.node_id,
+            task_id=req.task_id,
+            delegation_id=req.delegation_id,
+            attempt=req.attempt,
+        )
+    except ClaimError as exc:
+        logger.info(
+            "command claim denied node_id=%s task_id=%s delegation_id=%s attempt=%s status=%s detail=%s",
+            node.node_id,
+            req.task_id,
+            req.delegation_id,
+            req.attempt,
+            exc.status_code,
+            exc,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return claimed
 
 
 @router.post("/commands/ack")
@@ -302,7 +311,24 @@ async def ack_command(
     node = await _node_from_token(x_node_token)
     if node.role not in _CLAIM_ROLES:
         raise HTTPException(status_code=403, detail="role cannot ack executions")
-    return {"acked": True, "node_id": node.node_id, "means": "persisted", "completed": False}
+    try:
+        return await record_command_ack(
+            node.node_id,
+            task_id=req.task_id,
+            delegation_id=req.delegation_id,
+            attempt=req.attempt,
+        )
+    except ClaimError as exc:
+        logger.info(
+            "command ack denied node_id=%s task_id=%s delegation_id=%s attempt=%s status=%s detail=%s",
+            node.node_id,
+            req.task_id,
+            req.delegation_id,
+            req.attempt,
+            exc.status_code,
+            exc,
+        )
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.post("/events/batch")

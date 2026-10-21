@@ -1,4 +1,4 @@
-"""语音终端：注册、对话、确认后取回任务结果。"""
+"""语音终端：注册、直接派发、取回转译后的结果。"""
 
 import asyncio
 from datetime import datetime, timezone
@@ -57,6 +57,9 @@ class _Monitor:
 @pytest.fixture()
 def db(tmp_path, monkeypatch):
     monkeypatch.setenv("AGENTCENTER_GUIDE_DIR", str(tmp_path))
+    monkeypatch.setattr(
+        "app.core.super_ai_session.session_path", lambda: tmp_path / "sessions.json"
+    )
     init_db(f"sqlite+aiosqlite:///{tmp_path}/voice.db")
     return tmp_path
 
@@ -88,31 +91,20 @@ def test_voice_device_talks_and_collects_task(db):
             task_manager=tasks,
             monitor=_Monitor(),
         )
-        assert said.pending is not None
-        assert said.task_id == ""
-        assert tasks.created == []
+        assert said.pending is None
+        assert said.task_id == "t-voice"
+        assert said.task_status == "queued"
+        assert "已交给" in said.reply
+        assert tasks.created
 
-        started = await device_turn(
-            token,
-            "确认",
-            workspace_slug="cyber",
-            pending=said.pending,
-            registry=_Registry(),
-            task_manager=tasks,
-            monitor=_Monitor(),
-        )
-        assert started.task_id == "t-voice"
-        assert started.task_status == "queued"
-        assert "AgentCenter" in started.reply
-
-        waiting = await device_task(token, started.task_id, tasks)
+        waiting = await device_task(token, said.task_id, tasks)
         assert waiting["done"] is False
         assert "排队" in waiting["reply"]
 
         tasks.rows["t-voice"] = _task(
             id="t-voice", status="completed", output="本周输出已整理好。"
         )
-        done = await device_task(token, started.task_id, tasks)
+        done = await device_task(token, said.task_id, tasks)
         assert done["done"] is True
         assert done["reply"] == "本周输出已整理好。"
 

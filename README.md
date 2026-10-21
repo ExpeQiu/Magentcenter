@@ -1,6 +1,6 @@
 # AgentCenter
 
-OpenClaw 与 Hermes 的编排中台。云端协调器负责任务、知识库、技能、输出物和设备名册；各台机器上的智能体仍在本机执行。
+OpenClaw 与 Hermes 的编排中台。云端协调器只放超级AI、云端任务、设备名册、跨端路由和审计；智能体执行、知识库、技能和输出物在本机完整版。
 
 首页是「超级AI」：一句话只落到白名单服务（任务、知识库、技能、输出物、系统、多端）。建任务先复述，回复「确认」后才执行。控制台仍在工作区路径下，默认工作区是 `cyber`。
 
@@ -70,7 +70,7 @@ cp .env.example .env
 - 已绑定端可以 `POST /api/fleet/call` 调用另一台设备上的智能体。绑定列表中的第一个是主智能体。
 - 设备有公网地址时：`fleet-edge --mode webhook --webhook-url http://设备:8766/fleet`。签名头 `X-Fleet-Timestamp`、`X-Fleet-Signature`。
 
-云端协调器读不到本机 iCloud。`./scripts/sync-waytoai.sh` 把 WaytoAI 同步到服务器 `/opt/agentcenter/WaytoAI`，并把知识库、技能目录指到其中的 `personalwiki` 和 `skills`。`--install` 之后每 15 分钟一次，日志在 `logs/sync-waytoai.log`。
+云端用 `DEPLOY_PROFILE=cloud`，不挂个人目录，也不把 WaytoAI 同步上去。知识库、技能和输出物留在本机完整版。`./scripts/sync-waytoai.sh` 只作为单独的人工镜像，不写入云端 `content_roots.json`。
 
 ## 主要 API
 
