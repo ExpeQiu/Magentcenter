@@ -99,6 +99,8 @@ class Settings(BaseSettings):
     fleet_heartbeat_ttl: int = 45
     # 只在控制台还没保存过云端地址时作为默认值。已保存的地址以 data/fleet_link.json 为准。
     fleet_cloud_url: str = ""
+    # 云端派到本机的任务额度（与本地槽位分开计）
+    cloud_inbound_slots: int = 2
 
     def enabled_runtimes(self) -> list[str]:
         return parse_enabled_runtimes(self.runtimes)
@@ -113,12 +115,27 @@ class Settings(BaseSettings):
         return value
 
     def executors_enabled(self) -> bool:
+        """本机是否允许创建/承接本地执行任务（含外置 Node Agent）。cloud 默认否。"""
+        return self.normalized_profile() != "cloud"
+
+    def local_cli_scan_enabled(self) -> bool:
+        """Core 是否扫描/内嵌调用本机 OpenClaw/Hermes。"""
+        mode = (self.local_executor_scan or "auto").strip().lower()
+        if mode == "off":
+            return False
+        if mode == "on":
+            return self.executors_enabled()
+        # auto：无 Node Agent 时才扫描
+        return self.executors_enabled() and not _node_agent_alive()
+
+    def embedded_executor_preferred(self) -> bool:
+        """True 时 Core 进程内跑 OpenClaw/Hermes；False 时排队等 Node Agent claim。"""
         mode = (self.local_executor_scan or "auto").strip().lower()
         if mode == "on":
             return True
         if mode == "off":
             return False
-        return self.normalized_profile() != "cloud"
+        return not _node_agent_alive()
 
     def connector_enabled(self) -> bool:
         mode = (self.cloud_connector or "auto").strip().lower()
@@ -130,11 +147,32 @@ class Settings(BaseSettings):
 
     def execution_slots(self) -> int:
         profile = self.normalized_profile()
-        if profile == "cloud" or not self.executors_enabled():
+        if profile == "cloud":
             return 0
         if profile == "edge":
             return 1
         return max(1, int(self.max_concurrent_tasks or 1))
+
+
+def _node_agent_alive() -> bool:
+    from pathlib import Path
+
+    from app.paths import data_dir
+
+    pid_path = data_dir() / "node-agent.pid"
+    if not pid_path.is_file():
+        return False
+    try:
+        pid = int((pid_path.read_text(encoding="utf-8") or "").strip())
+    except (OSError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except OSError:
+        return False
 
 
 @lru_cache

@@ -20,9 +20,10 @@ import {
 
 interface SidebarProps {
   healthLabel: string;
+  onNavigate?: () => void;
 }
 
-export function Sidebar({ healthLabel }: SidebarProps) {
+export function Sidebar({ healthLabel, onNavigate }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { slug } = useWorkspace();
@@ -36,6 +37,7 @@ export function Sidebar({ healthLabel }: SidebarProps) {
       super: { href: "/", label: "超级AI", icon: "✦" },
       kanban: { href: wp.kanban(), label: "办公室", icon: "🏢" },
       tasks: { href: wp.tasks(), label: "任务", icon: "📋" },
+      workItems: { href: wp.workItems(), label: "工作", icon: "📎" },
       workflow: { href: wp.projects(), label: "workflow", icon: "🔁" },
       agents: { href: wp.agents(), label: "Agents", icon: "🤖" },
       squads: { href: wp.squads(), label: "小队", icon: "👥" },
@@ -150,6 +152,7 @@ export function Sidebar({ healthLabel }: SidebarProps) {
             <Link
               key={item.href}
               href={item.href}
+              onClick={() => onNavigate?.()}
               className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition ${
                 active
                   ? "bg-indigo-500/15 text-indigo-200"

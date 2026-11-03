@@ -30,6 +30,7 @@ _LIVE = {"accepted", "starting", "running"}
 _CLOSED_TASK = {"completed", "failed", "cancelled", "timeout", "succeeded"}
 _TERMINAL_EXECUTION = {"succeeded", "failed", "stopped"}
 CLAIM_TTL = timedelta(hours=24)
+LEASE_TTL = timedelta(minutes=5)
 
 
 class ClaimError(ValueError):
@@ -86,10 +87,31 @@ async def open_local(task_id: str, runtime: str, agent_id: str, attempt: int = 1
 
 async def accept_remote(task_id: str, node_id: str, attempt: int = 1, delegation_id: str = "") -> bool:
     """同一 delegation/attempt 或同一 v1 任务只接收一次。返回 False 表示已经接收过。"""
+    from app.config import get_settings
+
+    settings = get_settings()
+    inbound_cap = max(0, int(getattr(settings, "cloud_inbound_slots", 2) or 0))
     key = f"remote:{delegation_id or task_id}:{attempt}"
     ident = load_or_create_identity()
     factory = get_session_factory()
     async with factory() as session:
+        if inbound_cap > 0:
+            live_remote = (
+                await session.execute(
+                    select(ExecutionRecord).where(
+                        ExecutionRecord.status.in_(_LIVE),
+                        ExecutionRecord.dedupe_key.like("remote:%"),
+                    )
+                )
+            ).scalars().all()
+            if len(live_remote) >= inbound_cap:
+                logger.warning(
+                    "cloud inbound slots full cap=%s live=%s task_id=%s",
+                    inbound_cap,
+                    len(live_remote),
+                    task_id,
+                )
+                raise ClaimError("cloud inbound slots exhausted", 429)
         session.add(
             ExecutionRecord(
                 id=str(uuid.uuid4()),
@@ -204,6 +226,77 @@ async def _authorize_claim(
     if expired and existing is None:
         raise ClaimError("command expired", 409)
     return task, delegation, existing
+
+
+async def claim_next(node_id: str) -> dict | None:
+    """领取下一条排队给本节点的本地任务（外置 Node Agent 主路径）。"""
+    ident = load_or_create_identity()
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(TaskRecord)
+                .where(TaskRecord.status == "queued")
+                .where(TaskRecord.owner_center_id.in_([ident.center_id, ""]))
+                .order_by(TaskRecord.created_at.asc())
+                .limit(20)
+            )
+        ).scalars().all()
+        for task in rows:
+            assigned = (task.node_id or "").strip()
+            if assigned and assigned != node_id and assigned.lower() != "local":
+                continue
+            live = (
+                await session.execute(
+                    select(ExecutionRecord).where(
+                        ExecutionRecord.task_id == task.id,
+                        ExecutionRecord.status.in_(_LIVE | {"unknown"}),
+                    )
+                )
+            ).scalars().first()
+            if live is not None:
+                continue
+            task.node_id = node_id
+            task.updated_at = _now()
+            execution_id = str(uuid.uuid4())
+            session.add(
+                ExecutionRecord(
+                    id=execution_id,
+                    task_id=task.id,
+                    owner_center_id=ident.center_id,
+                    node_id=node_id,
+                    attempt=1,
+                    dedupe_key=_dedupe_key(task.id, "", 1),
+                    status="accepted",
+                    runtime=task.runtime or "",
+                    agent_id=task.agent_id or "",
+                    lease_expires_at=_now() + LEASE_TTL,
+                    assignment_generation=1,
+                )
+            )
+            await session.commit()
+            logger.info(
+                "claim_next accepted node_id=%s task_id=%s execution_id=%s",
+                node_id,
+                task.id,
+                execution_id,
+            )
+            return {
+                "accepted": True,
+                "task_id": task.id,
+                "execution_id": execution_id,
+                "delegation_id": "",
+                "attempt": 1,
+                "assignment_generation": 1,
+                "status": "accepted",
+                "runtime": task.runtime or "",
+                "agent_id": task.agent_id or "",
+                "prompt": task.prompt or "",
+                "system_prompt": task.system_prompt or "",
+                "session_id": task.session_id or "",
+                "workspace_id": task.workspace_id or "",
+            }
+    return None
 
 
 async def claim_assigned(
@@ -488,7 +581,6 @@ def reconcile_handle(saved_status: str, handle_alive: bool) -> str:
     return "unknown"
 
 
-LEASE_TTL = timedelta(minutes=5)
 _DELIVERY_ACKS = {"received", "applied", "result_persisted"}
 
 
@@ -573,3 +665,73 @@ async def reject_stale_write(
             raise ClaimError("execution not found", 404)
         if int(generation) != int(row.assignment_generation or 1):
             raise ClaimError("stale assignment generation", 409)
+
+
+async def finish_execution(
+    node_id: str,
+    *,
+    task_id: str,
+    execution_id: str = "",
+    status: str,
+    output: str = "",
+    error: str = "",
+    session_id: str = "",
+    duration_ms: int = 0,
+    generation: int | None = None,
+) -> dict:
+    """Node Agent 回写结果。代次不符则拒绝（迟到回写）。"""
+    if status not in {"completed", "failed", "cancelled", "timeout"}:
+        raise ClaimError("status must be completed|failed|cancelled|timeout", 400)
+    exec_status = {
+        "completed": "succeeded",
+        "failed": "failed",
+        "cancelled": "stopped",
+        "timeout": "interrupted",
+    }[status]
+    factory = get_session_factory()
+    async with factory() as session:
+        task = await session.get(TaskRecord, task_id)
+        if task is None:
+            raise ClaimError("task not found", 404)
+        if (task.node_id or "") and task.node_id != node_id:
+            raise ClaimError("task belongs to another node", 403)
+        row = None
+        if execution_id:
+            row = await session.get(ExecutionRecord, execution_id)
+        if row is None:
+            row = (
+                await session.execute(
+                    select(ExecutionRecord)
+                    .where(ExecutionRecord.task_id == task_id)
+                    .order_by(ExecutionRecord.created_at.desc())
+                )
+            ).scalars().first()
+        if row is not None:
+            if row.node_id and row.node_id != node_id:
+                raise ClaimError("execution belongs to another node", 403)
+            current = int(row.assignment_generation or 1)
+            if generation is not None and int(generation) != current:
+                raise ClaimError("stale assignment generation", 409)
+            row.status = exec_status
+            row.delivery_ack = "result_persisted"
+            row.updated_at = _now()
+        if task.status in _CLOSED_TASK and task.status == status:
+            return {"task_id": task_id, "status": task.status, "duplicate": True}
+        if task.status in _CLOSED_TASK:
+            raise ClaimError(f"task already finished: {task.status}", 409)
+        task.status = status
+        task.output = output or ""
+        task.error = error or ""
+        if session_id:
+            task.session_id = session_id
+        task.duration_ms = int(duration_ms or 0)
+        task.updated_at = _now()
+        await session.commit()
+    logger.info(
+        "execution finished node_id=%s task_id=%s status=%s generation=%s",
+        node_id,
+        task_id,
+        status,
+        generation,
+    )
+    return {"task_id": task_id, "execution_id": execution_id, "status": status}

@@ -23,6 +23,8 @@ export const paths = {
     knowledge: () => `/${slug}/knowledge`,
     outputs: () => `/${slug}/outputs`,
     fleet: () => `/${slug}/fleet`,
+    workItems: () => `/${slug}/work-items`,
+    workItemDetail: (id: string) => `/${slug}/work-items/detail?id=${enc(id)}`,
   }),
 } as const;
 

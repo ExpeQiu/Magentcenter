@@ -1,0 +1,43 @@
+# AgentCenter 云端 HTTPS 反代示例（放到 /etc/nginx/sites-available/）
+# 证书：certbot --nginx -d your.domain
+# 上游仍是本机 8080 的 agentcenter-cloud.service
+
+upstream agentcenter_cloud {
+    server 127.0.0.1:8080;
+    keepalive 8;
+}
+
+server {
+    listen 80;
+    server_name your.domain;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your.domain;
+
+    # ssl_certificate     /etc/letsencrypt/live/your.domain/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/your.domain/privkey.pem;
+
+    client_max_body_size 32m;
+
+    location / {
+        proxy_pass http://agentcenter_cloud;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 120s;
+    }
+
+    location /ws/ {
+        proxy_pass http://agentcenter_cloud;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+}

@@ -6,9 +6,10 @@
 环境变量：
   AGENTCENTER_URL        云端协调器，默认 http://127.0.0.1:8013
   FLEET_ENROLL_TOKEN     与云端 .env 相同
-  FLEET_NODE_ID          缺省用主机名
+  FLEET_NODE_ID          优先；否则读 AGENTCENTER_DATA_DIR/node_identity.json；最后才主机名 slug
   FLEET_NODE_NAME
   FLEET_NODE_TOKEN_FILE  令牌落盘路径
+  AGENTCENTER_DATA_DIR   与本地 Core 共用身份与 PID
   FLEET_MOCK=1           不调用本机 CLI
 """
 
@@ -165,6 +166,27 @@ def slug_node_id(hostname: str) -> str:
     base = (hostname or "").split(".")[0].lower()
     base = re.sub(r"[^a-z0-9_-]", "-", base).strip("-")
     return (base or "device")[:64]
+
+
+def resolve_node_id(explicit: str = "", hostname: str = "") -> str:
+    """优先显式 ID，其次与 Core 共用的 node_identity.json，最后才主机名 slug。"""
+    if (explicit or "").strip():
+        return explicit.strip()
+    data_dir = Path(
+        _env("AGENTCENTER_DATA_DIR")
+        or str(Path.home() / "Library/Application Support/AgentCenter/data")
+    )
+    identity_path = data_dir / "node_identity.json"
+    if identity_path.is_file():
+        try:
+            raw = json.loads(identity_path.read_text(encoding="utf-8"))
+            node_id = str(raw.get("node_id") or "").strip()
+            if node_id:
+                logger.info("node_id from identity path=%s", identity_path)
+                return node_id
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("identity read failed path=%s err=%s", identity_path, exc)
+    return slug_node_id(hostname or socket.gethostname())
 
 
 def _run_scan(cmd: list[str]) -> str:
@@ -547,7 +569,7 @@ def main() -> int:
         return 2
 
     hostname = socket.gethostname()
-    node_id = (args.node_id or slug_node_id(hostname)).strip().lower()
+    node_id = resolve_node_id(args.node_id, hostname)
     agents = scan_agents()
     if not agents:
         logger.error("本机没有扫到 OpenClaw 或 Hermes 智能体，无法上报")

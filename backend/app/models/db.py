@@ -670,6 +670,12 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("knowledge_entries", "availability", "VARCHAR(16) DEFAULT ''"),
     ("knowledge_entries", "node_id", "VARCHAR(64) DEFAULT ''"),
     ("knowledge_entries", "access_scope", "VARCHAR(64) DEFAULT ''"),
+    ("work_items", "owner_center_id", "VARCHAR(64) DEFAULT ''"),
+    ("work_items", "status", "VARCHAR(32) DEFAULT 'ready'"),
+    ("work_items", "wait_reason", "VARCHAR(64) DEFAULT ''"),
+    ("work_items", "requirement_revision", "INTEGER DEFAULT 1"),
+    ("work_items", "task_id", "VARCHAR(36) DEFAULT ''"),
+    ("work_items", "accepted_artifact_id", "VARCHAR(36) DEFAULT ''"),
 ]
 
 
@@ -679,15 +685,107 @@ def init_db(database_url: str) -> None:
     _session_factory = async_sessionmaker(_engine, class_=AsyncSession, expire_on_commit=False)
 
 
-async def _migrate_columns(conn) -> None:
-    """轻量迁移：为已有 SQLite 库补列。"""
+async def _table_columns(conn, table: str) -> set[str]:
     from sqlalchemy import text
 
+    result = await conn.execute(text(f"PRAGMA table_info({table})"))
+    return {row[1] for row in result.fetchall()}
+
+
+async def _migrate_legacy_work_items(conn) -> None:
+    """旧 work_items（state/owner_id/…）重建为当前模型列名，并尽量保留行。"""
+    from sqlalchemy import text
+
+    exists = (
+        await conn.execute(
+            text("SELECT 1 FROM sqlite_master WHERE type='table' AND name='work_items'")
+        )
+    ).fetchone()
+    if not exists:
+        return
+    cols = await _table_columns(conn, "work_items")
+    legacy = ("state" in cols or "owner_id" in cols) and (
+        "status" not in cols or "owner_center_id" not in cols
+    )
+    if not legacy:
+        return
+
+    await conn.execute(
+        text(
+            """
+            CREATE TABLE work_items__new (
+                id VARCHAR(36) PRIMARY KEY,
+                owner_center_id VARCHAR(64) DEFAULT '',
+                workspace_id VARCHAR(64) DEFAULT '',
+                conversation_id VARCHAR(64) DEFAULT '',
+                title VARCHAR(256) DEFAULT '',
+                goal TEXT DEFAULT '',
+                status VARCHAR(32) DEFAULT 'ready',
+                wait_reason VARCHAR(64) DEFAULT '',
+                requirement_revision INTEGER DEFAULT 1,
+                state_version INTEGER DEFAULT 1,
+                task_id VARCHAR(36) DEFAULT '',
+                accepted_artifact_id VARCHAR(36) DEFAULT '',
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+            """
+        )
+    )
+    # 列可能缺失时用表达式兜底
+    state_expr = "state" if "state" in cols else "'ready'"
+    wait_expr = "waiting_reason" if "waiting_reason" in cols else "''"
+    rev_expr = "requirements_revision" if "requirements_revision" in cols else "1"
+    ver_expr = "state_version" if "state_version" in cols else "1"
+    await conn.execute(
+        text(
+            f"""
+            INSERT INTO work_items__new (
+                id, owner_center_id, workspace_id, conversation_id, title, goal,
+                status, wait_reason, requirement_revision, state_version,
+                task_id, accepted_artifact_id, created_at, updated_at
+            )
+            SELECT
+                id, '', workspace_id, conversation_id, title, goal,
+                COALESCE({state_expr}, 'ready'),
+                COALESCE({wait_expr}, ''),
+                COALESCE({rev_expr}, 1),
+                COALESCE({ver_expr}, 1),
+                '', '', created_at, updated_at
+            FROM work_items
+            """
+        )
+    )
+    await conn.execute(text("DROP TABLE work_items"))
+    await conn.execute(text("ALTER TABLE work_items__new RENAME TO work_items"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_work_items_workspace_id ON work_items (workspace_id)"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_work_items_status ON work_items (status)"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_work_items_conversation_id ON work_items (conversation_id)"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_work_items_owner_center_id ON work_items (owner_center_id)"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_work_items_task_id ON work_items (task_id)"))
+
+
+async def _migrate_columns(conn) -> None:
+    """轻量迁移：为已有 SQLite 库补列；必要时重建旧 work_items。"""
+    from sqlalchemy import text
+
+    await _migrate_legacy_work_items(conn)
+
     async def has_column(table: str, column: str) -> bool:
-        result = await conn.execute(text(f"PRAGMA table_info({table})"))
-        return any(row[1] == column for row in result.fetchall())
+        return column in await _table_columns(conn, table)
+
+    async def table_exists(table: str) -> bool:
+        row = (
+            await conn.execute(
+                text("SELECT 1 FROM sqlite_master WHERE type='table' AND name=:t"),
+                {"t": table},
+            )
+        ).fetchone()
+        return row is not None
 
     for table, column, ddl in _MIGRATIONS:
+        if not await table_exists(table):
+            continue
         if not await has_column(table, column):
             await conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
 

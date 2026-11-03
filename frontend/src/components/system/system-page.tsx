@@ -30,6 +30,26 @@ export function SystemPage() {
   const [error, setError] = useState("");
   const [repairingId, setRepairingId] = useState("");
   const [repairMsg, setRepairMsg] = useState("");
+  const [stopMsg, setStopMsg] = useState("");
+
+  const stopLocalServices = async () => {
+    setStopMsg("");
+    try {
+      const inv =
+        (window as unknown as { __TAURI__?: { core?: { invoke: (c: string) => Promise<unknown> } } })
+          .__TAURI__?.core?.invoke ||
+        (window as unknown as { __TAURI_INTERNALS__?: { invoke: (c: string) => Promise<unknown> } })
+          .__TAURI_INTERNALS__?.invoke;
+      if (!inv) {
+        setStopMsg("非桌面壳：请在本机运行 scripts/stop.sh");
+        return;
+      }
+      await inv("stop_node_service");
+      setStopMsg("已请求停止本地 Core 与 Node Agent");
+    } catch (e) {
+      setStopMsg(`停止失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
 
   const load = (refresh = false) => {
     setLoading(true);
@@ -169,14 +189,26 @@ export function SystemPage() {
         title="系统状态"
         description="OpenClaw / Hermes 双栈 Gateway · Cron · 告警"
         actions={
-          <button
-            onClick={() => load(true)}
-            className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
-          >
-            刷新
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void stopLocalServices()}
+              className="rounded-lg border border-rose-800/60 px-3 py-1.5 text-sm text-rose-200 hover:bg-rose-950/40"
+            >
+              停止本地服务
+            </button>
+            <button
+              onClick={() => load(true)}
+              className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
+            >
+              刷新
+            </button>
+          </div>
         }
       />
+      {stopMsg ? (
+        <p className="mb-3 text-xs text-slate-400">{stopMsg}</p>
+      ) : null}
       {loading && !status ? (
         <p className="text-slate-500">加载中…</p>
       ) : error ? (

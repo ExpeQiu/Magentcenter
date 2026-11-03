@@ -346,6 +346,31 @@ class TaskManager:
             summary=req.prompt,
             detail={"runtime": runtime, "agent_id": req.agent_id},
         )
+        prefer_embedded = self.settings.embedded_executor_preferred()
+        if not prefer_embedded:
+            # 外置 Node Agent：盖章本机 node_id，不内嵌 dispatch
+            factory = get_session_factory()
+            async with factory() as session:
+                rec = await session.get(TaskRecord, task_id)
+                if rec is not None:
+                    rec.node_id = stamped_node or ident.node_id
+                    await session.commit()
+            logger.info(
+                "local task queued for node-agent center_id=%s task_id=%s node_id=%s scan=%s",
+                ident.center_id,
+                task_id,
+                stamped_node or ident.node_id,
+                self.settings.local_executor_scan,
+            )
+            await self._emit(
+                task_id,
+                TaskEvent(
+                    type="status",
+                    status="queued",
+                    content="waiting for node-agent claim",
+                ),
+            )
+            return info
         execution_id = await open_local(task_id, runtime, req.agent_id)
         logger.info(
             "local execution opened center_id=%s task_id=%s execution_id=%s attempt=%s",

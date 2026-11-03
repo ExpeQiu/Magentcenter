@@ -1,0 +1,25 @@
+[Unit]
+Description=AgentCenter cloud coordinator
+Documentation=file:///opt/agentcenter/app/guide/cloud-deploy.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/agentcenter/app/backend
+EnvironmentFile=-/opt/agentcenter/app/.env
+Environment=AGENTCENTER_ROOT=/opt/agentcenter/app
+Environment=AGENTCENTER_DATA_DIR=/opt/agentcenter/data
+Environment=AGENTCENTER_LOG_DIR=/opt/agentcenter/logs
+Environment=AGENTCENTER_STATIC_DIR=/opt/agentcenter/app/frontend/out
+Environment=AGENTCENTER_GUIDE_DIR=/opt/agentcenter/app/guide
+Environment=AGENTCENTER_ENV_FILE=/opt/agentcenter/app/.env
+ExecStart=/opt/agentcenter/app/backend/.venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

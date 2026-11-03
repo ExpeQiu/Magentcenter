@@ -298,6 +298,21 @@ async def _route_turn(
     session_id: str = "",
     subject_id: str = "local",
 ) -> SuperAiTurnResponse:
+    # Super-agent Router：结构化建议（不持工具）；过时策略由 Controller 否决
+    try:
+        from app.domain.superagent.router import controller_accept, evaluate
+
+        suggestion = await evaluate(text=text or "")
+        if suggestion.action == "stop" and controller_accept(
+            suggestion, expected_policy=1, actual_policy=1
+        ):
+            logger.info(
+                "super_ai router stop subject=%s reason=%s",
+                subject_id,
+                suggestion.reason,
+            )
+    except Exception:
+        logger.exception("super_ai router evaluate failed")
     started = time.perf_counter()
     run_id = uuid.uuid4().hex[:12]
     slug = _slug(workspace_slug)

@@ -69,6 +69,15 @@ else
     "$ROOT/backend/app" "$RUNTIME/backend/"
   cp "$ROOT/backend/requirements.txt" "$RUNTIME/backend/requirements.txt"
 
+  log "copy node-agent + fleet-edge sources"
+  mkdir -p "$RUNTIME/node-agent/src" "$RUNTIME/fleet-edge/src"
+  rsync -a --delete \
+    --exclude '__pycache__' --exclude '*.pyc' \
+    "$ROOT/node-agent/src/" "$RUNTIME/node-agent/src/"
+  rsync -a --delete \
+    --exclude '__pycache__' --exclude '*.pyc' --exclude 'tests' \
+    "$ROOT/fleet-edge/src/" "$RUNTIME/fleet-edge/src/"
+
   log "copy guide yaml + env example"
   cp "$ROOT/guide/squads.yml" "$ROOT/guide/projects.yml" "$ROOT/guide/workspaces.yml" "$RUNTIME/guide/"
   cp "$ROOT/.env.example" "$RUNTIME/.env.example"

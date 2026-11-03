@@ -6,6 +6,7 @@ export type NavKey =
   | "super"
   | "kanban"
   | "tasks"
+  | "workItems"
   | "workflow"
   | "agents"
   | "squads"
@@ -29,11 +30,12 @@ export const MODE_LABEL: Record<EndpointMode, string> = {
 export const CLOUD_TERMINAL_LABEL = "云端";
 
 const NAV_BY_MODE: Record<EndpointMode, NavKey[]> = {
-  cloud: ["super", "tasks", "fleet", "system"],
+  cloud: ["super", "tasks", "workItems", "fleet", "system"],
   pc: [
     "super",
     "kanban",
     "tasks",
+    "workItems",
     "workflow",
     "agents",
     "squads",
@@ -45,7 +47,7 @@ const NAV_BY_MODE: Record<EndpointMode, NavKey[]> = {
     "knowledge",
     "outputs",
   ],
-  hardware: ["super", "tasks", "agents", "fleet", "system"],
+  hardware: ["super", "tasks", "workItems", "agents", "fleet", "system"],
   voice: ["super", "sessions"],
 };
 

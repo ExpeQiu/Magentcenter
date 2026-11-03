@@ -48,6 +48,8 @@ class HealthResponse(BaseModel):
     default_runtime: str = "openclaw"
     mock_mode: bool
     deploy_profile: str = "full"
+    execution_slots: int = 0
+    cloud_inbound_slots: int = 0
     protocol_version: int = 2
     center_id: str = ""
 

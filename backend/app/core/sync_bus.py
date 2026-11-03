@@ -296,7 +296,13 @@ async def _peer_deliver(target_center_id: str, message: dict) -> bool:
     token_path = link_token_path()
     if token_path.is_file():
         token = token_path.read_text(encoding="utf-8").strip()
-    body = json.dumps({"messages": [message]}, ensure_ascii=False).encode()
+    # 与 BatchRequest.events 对齐（勿用 messages，否则空 ingest 仍可能 200 假 ACK）
+    event = dict(message)
+    event.setdefault("protocol_version", 2)
+    body = json.dumps(
+        {"protocol_version": 2, "events": [event]},
+        ensure_ascii=False,
+    ).encode()
     req = urllib.request.Request(
         cloud_url + "/api/v2/events/batch",
         data=body,

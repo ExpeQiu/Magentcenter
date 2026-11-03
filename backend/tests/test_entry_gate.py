@@ -74,6 +74,9 @@ def test_session_endpoints_are_public_without_a_token():
     assert _session_public("/api/health")
     assert _session_public("/api/session/status")
     assert _session_public("/api/session/unlock")
+    assert _session_public("/api/fleet/enroll")
+    assert _session_public("/api/fleet/handshake")
+    assert _session_public("/api/fleet/handshake/accept")
     assert not _session_public("/api/tasks")
 
 

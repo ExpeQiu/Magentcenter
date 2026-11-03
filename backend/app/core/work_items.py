@@ -112,6 +112,32 @@ async def append_message(
     return mid
 
 
+async def list_conversation_messages(conversation_id: str, limit: int = 40) -> list[dict]:
+    cid = (conversation_id or "").strip()
+    if not cid:
+        return []
+    factory = get_session_factory()
+    async with factory() as session:
+        rows = (
+            await session.execute(
+                select(ConversationMessageRecord)
+                .where(ConversationMessageRecord.conversation_id == cid)
+                .order_by(ConversationMessageRecord.created_at.asc())
+                .limit(max(1, min(limit, 200)))
+            )
+        ).scalars().all()
+        return [
+            {
+                "id": r.id,
+                "role": r.role,
+                "content": r.content or "",
+                "task_id": r.task_id or "",
+                "channel": r.channel or "",
+            }
+            for r in rows
+        ]
+
+
 async def record_trigger(
     *,
     source: str,
@@ -182,6 +208,17 @@ async def create_work_item(
                 conv.active_work_item_id = wid
                 conv.updated_at = _now()
         await session.commit()
+    try:
+        from app.domain.superagent import mandate as mandate_svc
+
+        await mandate_svc.issue(
+            wid,
+            issued_by="local",
+            permitted_actions=["task.execute", "task.cancel", "artifact.accept"],
+            policy_version=1,
+        )
+    except Exception:
+        logger.exception("mandate issue failed work_item=%s", wid)
     logger.info(
         "work_item created id=%s task_id=%s conversation=%s",
         wid,
@@ -218,21 +255,48 @@ async def accept_work_item(work_item_id: str, artifact_id: str = "") -> bool:
     return True
 
 
+def _work_dict(row: WorkItemRecord) -> dict:
+    return {
+        "id": row.id,
+        "title": row.title,
+        "goal": row.goal,
+        "status": row.status,
+        "wait_reason": row.wait_reason,
+        "task_id": row.task_id,
+        "conversation_id": row.conversation_id,
+        "workspace_id": row.workspace_id,
+        "owner_center_id": row.owner_center_id,
+        "requirement_revision": row.requirement_revision,
+        "state_version": row.state_version,
+        "accepted_artifact_id": row.accepted_artifact_id,
+        "created_at": row.created_at.isoformat() + "Z" if row.created_at else "",
+        "updated_at": row.updated_at.isoformat() + "Z" if row.updated_at else "",
+    }
+
+
 async def get_work_item(work_item_id: str) -> dict | None:
     factory = get_session_factory()
     async with factory() as session:
         row = await session.get(WorkItemRecord, work_item_id)
         if row is None:
             return None
-        return {
-            "id": row.id,
-            "title": row.title,
-            "goal": row.goal,
-            "status": row.status,
-            "wait_reason": row.wait_reason,
-            "task_id": row.task_id,
-            "conversation_id": row.conversation_id,
-            "owner_center_id": row.owner_center_id,
-            "requirement_revision": row.requirement_revision,
-            "state_version": row.state_version,
-        }
+        return _work_dict(row)
+
+
+async def list_work_items(
+    *,
+    workspace_id: str = "",
+    status: str = "",
+    limit: int = 50,
+) -> list[dict]:
+    factory = get_session_factory()
+    async with factory() as session:
+        stmt = select(WorkItemRecord).order_by(WorkItemRecord.updated_at.desc()).limit(
+            max(1, min(limit, 200))
+        )
+        if workspace_id:
+            stmt = stmt.where(WorkItemRecord.workspace_id == workspace_id)
+        if status:
+            stmt = stmt.where(WorkItemRecord.status == status)
+        rows = (await session.execute(stmt)).scalars().all()
+        return [_work_dict(r) for r in rows]

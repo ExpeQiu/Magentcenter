@@ -44,6 +44,23 @@ export interface ChainEvent {
   created_at: string;
 }
 
+export interface WorkItemInfo {
+  id: string;
+  title: string;
+  goal: string;
+  status: string;
+  wait_reason: string;
+  task_id: string;
+  conversation_id: string;
+  workspace_id: string;
+  owner_center_id: string;
+  requirement_revision: number;
+  state_version: number;
+  accepted_artifact_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface TaskInfo {
   id: string;
   workspace_id: string;

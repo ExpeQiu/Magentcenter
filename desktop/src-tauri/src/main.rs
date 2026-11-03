@@ -1,4 +1,4 @@
-//! AgentCenter 桌面壳。窗口关闭不停止后台节点服务。
+//! AgentCenter 桌面壳。窗口关闭不停止后台节点服务（Core + Node Agent）。
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
@@ -18,6 +18,7 @@ const API_HEALTH: &str = "http://127.0.0.1:8013/api/health";
 const API_HOME: &str = "http://127.0.0.1:8013/";
 
 static BACKEND: Mutex<Option<Child>> = Mutex::new(None);
+static NODE_AGENT: Mutex<Option<Child>> = Mutex::new(None);
 static STARTED_BY_APP: AtomicBool = AtomicBool::new(false);
 
 fn support_dir() -> PathBuf {
@@ -26,6 +27,10 @@ fn support_dir() -> PathBuf {
 
 fn dirs_support() -> PathBuf {
     home_dir().join("Library/Application Support/AgentCenter")
+}
+
+fn data_dir() -> PathBuf {
+    support_dir().join("data")
 }
 
 fn logs_dir() -> PathBuf {
@@ -51,7 +56,6 @@ fn desktop_log(msg: &str) {
 }
 
 fn chrono_like_now() -> String {
-    // 避免额外依赖；ISO 近似即可
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -98,7 +102,7 @@ fn runtime_root(app: &AppHandle) -> PathBuf {
 }
 
 fn ensure_user_dirs(runtime: &Path) {
-    let _ = fs::create_dir_all(support_dir().join("data"));
+    let _ = fs::create_dir_all(data_dir());
     let _ = fs::create_dir_all(logs_dir());
     let env_dst = support_dir().join(".env");
     let env_src = runtime.join(".env.example");
@@ -112,8 +116,6 @@ fn ensure_user_dirs(runtime: &Path) {
 }
 
 fn prepend_path() {
-    // npm-global OpenClaw matches the running gateway. Homebrew's older
-    // binary is first on a typical PATH and rejects the current config.
     let extras = [
         home_dir().join(".npm-global/bin").display().to_string(),
         home_dir().join(".local/bin").display().to_string(),
@@ -124,6 +126,83 @@ fn prepend_path() {
     let mut parts = extras.to_vec();
     parts.push(old);
     std::env::set_var("PATH", parts.join(":"));
+}
+
+fn write_pid(name: &str, pid: u32) {
+    let _ = fs::create_dir_all(data_dir());
+    let path = data_dir().join(format!("{name}.pid"));
+    if let Err(e) = fs::write(&path, format!("{pid}\n")) {
+        desktop_log(&format!("write {name}.pid failed err={e}"));
+    }
+    if name == "core" {
+        let _ = fs::write(data_dir().join("agentcenter.pid"), format!("{pid}\n"));
+        let _ = fs::write(data_dir().join("sidecar.pid"), format!("{pid}\n"));
+    }
+}
+
+fn clear_pid(name: &str) {
+    let _ = fs::remove_file(data_dir().join(format!("{name}.pid")));
+    if name == "core" {
+        let _ = fs::remove_file(data_dir().join("agentcenter.pid"));
+        let _ = fs::remove_file(data_dir().join("sidecar.pid"));
+    }
+}
+
+fn stop_pid(pid: i32) {
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::killpg(pid, libc::SIGTERM);
+        }
+        thread::sleep(Duration::from_millis(400));
+        unsafe {
+            libc::killpg(pid, libc::SIGKILL);
+        }
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+fn stop_named(mutex: &Mutex<Option<Child>>, name: &str) {
+    let mut guard = match mutex.lock() {
+        Ok(g) => g,
+        Err(_) => return,
+    };
+    if let Some(mut child) = guard.take() {
+        desktop_log(&format!("stop {name} pid={}", child.id()));
+        stop_pid(child.id() as i32);
+        let _ = child.kill();
+        let _ = child.wait();
+        clear_pid(name);
+        return;
+    }
+    let path = data_dir().join(format!("{name}.pid"));
+    if let Ok(raw) = fs::read_to_string(&path) {
+        if let Ok(pid) = raw.trim().parse::<i32>() {
+            desktop_log(&format!("stop {name} from pidfile pid={pid}"));
+            stop_pid(pid);
+            clear_pid(name);
+        }
+    }
+    if name == "core" {
+        for legacy in ["sidecar", "agentcenter"] {
+            let p = data_dir().join(format!("{legacy}.pid"));
+            if let Ok(raw) = fs::read_to_string(&p) {
+                if let Ok(pid) = raw.trim().parse::<i32>() {
+                    desktop_log(&format!("stop legacy {legacy} pid={pid}"));
+                    stop_pid(pid);
+                    let _ = fs::remove_file(&p);
+                }
+            }
+        }
+    }
+}
+
+fn stop_all_services() {
+    stop_named(&NODE_AGENT, "node-agent");
+    stop_named(&BACKEND, "core");
+    STARTED_BY_APP.store(false, Ordering::SeqCst);
 }
 
 fn spawn_backend(runtime: &Path) -> Result<Child, String> {
@@ -139,7 +218,7 @@ fn spawn_backend(runtime: &Path) -> Result<Child, String> {
     let log = File::create(&log_file).map_err(|e| e.to_string())?;
     let err = log.try_clone().map_err(|e| e.to_string())?;
 
-    let db = support_dir().join("data/agentcenter.db");
+    let db = data_dir().join("agentcenter.db");
     let mut cmd = Command::new(&python);
     cmd.current_dir(&backend)
         .arg("-m")
@@ -153,10 +232,11 @@ fn spawn_backend(runtime: &Path) -> Result<Child, String> {
         .env("PYTHONPATH", &backend)
         .env("AGENTCENTER_ROOT", runtime)
         .env("AGENTCENTER_GUIDE_DIR", runtime.join("guide"))
-        .env("AGENTCENTER_DATA_DIR", support_dir().join("data"))
+        .env("AGENTCENTER_DATA_DIR", data_dir())
         .env("AGENTCENTER_LOG_DIR", logs_dir())
         .env("AGENTCENTER_ENV_FILE", support_dir().join(".env"))
         .env("AGENTCENTER_STATIC_DIR", runtime.join("frontend"))
+        .env("DEPLOY_PROFILE", "full")
         .env(
             "DATABASE_URL",
             format!("sqlite+aiosqlite:///{}", db.display()),
@@ -171,68 +251,121 @@ fn spawn_backend(runtime: &Path) -> Result<Child, String> {
     }
 
     desktop_log(&format!(
-        "spawn sidecar python={} backend={}",
+        "spawn core python={} backend={}",
         python.display(),
         backend.display()
     ));
     cmd.spawn().map_err(|e| e.to_string())
 }
 
-fn sidecar_pid_path() -> PathBuf {
-    support_dir().join("data/sidecar.pid")
-}
-
-fn write_sidecar_pid(pid: u32) {
-    let _ = fs::create_dir_all(support_dir().join("data"));
-    if let Err(e) = fs::write(sidecar_pid_path(), format!("{pid}\n")) {
-        desktop_log(&format!("write sidecar.pid failed err={e}"));
+fn env_wants_node_agent() -> bool {
+    let env_path = support_dir().join(".env");
+    let Ok(raw) = fs::read_to_string(env_path) else {
+        return false;
+    };
+    let mut enroll = false;
+    let mut start_flag = String::from("auto");
+    for line in raw.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once('=') {
+            let key = k.trim();
+            let val = v.trim().trim_matches('"').trim_matches('\'');
+            if key == "FLEET_ENROLL_TOKEN" && !val.is_empty() {
+                enroll = true;
+            }
+            if key == "START_NODE_AGENT" {
+                start_flag = val.to_ascii_lowercase();
+            }
+        }
+    }
+    match start_flag.as_str() {
+        "on" | "1" | "true" | "yes" => true,
+        "off" | "0" | "false" | "no" => false,
+        _ => enroll,
     }
 }
 
-fn clear_sidecar_pid() {
-    let _ = fs::remove_file(sidecar_pid_path());
+fn spawn_node_agent(runtime: &Path) -> Result<Child, String> {
+    let python = runtime.join("python/bin/python3");
+    let fleet_src = runtime.join("fleet-edge/src");
+    let node_src = runtime.join("node-agent/src");
+    if !node_src.join("agentcenter_node/main.py").is_file() {
+        // 开发态：相对仓库
+        let repo = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(|p| p.parent())
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from("."));
+        return spawn_node_agent_at(&python, &repo.join("fleet-edge/src"), &repo.join("node-agent/src"));
+    }
+    spawn_node_agent_at(&python, &fleet_src, &node_src)
 }
 
-fn stop_pid(pid: i32) {
+fn spawn_node_agent_at(python: &Path, fleet_src: &Path, node_src: &Path) -> Result<Child, String> {
+    if !python.is_file() {
+        return Err(format!("python missing for node-agent: {}", python.display()));
+    }
+    let log_file = logs_dir().join("node-agent.log");
+    let log = File::create(&log_file).map_err(|e| e.to_string())?;
+    let err = log.try_clone().map_err(|e| e.to_string())?;
+    let path = format!(
+        "{}:{}:{}",
+        node_src.display(),
+        fleet_src.display(),
+        std::env::var("PYTHONPATH").unwrap_or_default()
+    );
+    let mut cmd = Command::new(python);
+    cmd.arg("-m")
+        .arg("agentcenter_node.main")
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONPATH", path)
+        .env("AGENTCENTER_URL", format!("http://127.0.0.1:{API_PORT}"))
+        .env("AGENTCENTER_DATA_DIR", data_dir())
+        .env("AGENTCENTER_ENV_FILE", support_dir().join(".env"))
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(err));
+
+    // 从用户 .env 注入 enroll token
+    if let Ok(raw) = fs::read_to_string(support_dir().join(".env")) {
+        for line in raw.lines() {
+            let line = line.trim();
+            if let Some((k, v)) = line.split_once('=') {
+                let key = k.trim();
+                if key == "FLEET_ENROLL_TOKEN" || key == "FLEET_MOCK" || key == "FLEET_RUNTIMES" {
+                    cmd.env(key, v.trim().trim_matches('"').trim_matches('\''));
+                }
+            }
+        }
+    }
+
     #[cfg(unix)]
     {
-        unsafe {
-            libc::killpg(pid, libc::SIGTERM);
-        }
-        thread::sleep(Duration::from_millis(400));
-        unsafe {
-            libc::killpg(pid, libc::SIGKILL);
-        }
-        // 若不是进程组头，再杀单进程
-        unsafe {
-            libc::kill(pid, libc::SIGTERM);
-        }
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
     }
+
+    desktop_log("spawn node-agent");
+    cmd.spawn().map_err(|e| e.to_string())
 }
 
-fn stop_backend() {
-    let mut guard = match BACKEND.lock() {
-        Ok(g) => g,
-        Err(_) => return,
-    };
-    if let Some(mut child) = guard.take() {
-        desktop_log(&format!("stop sidecar pid={}", child.id()));
-        stop_pid(child.id() as i32);
-        let _ = child.kill();
-        let _ = child.wait();
-        clear_sidecar_pid();
-        STARTED_BY_APP.store(false, Ordering::SeqCst);
+fn maybe_start_node_agent(runtime: &Path) {
+    if !env_wants_node_agent() {
+        desktop_log("node-agent skipped (no enroll token / START_NODE_AGENT=off)");
         return;
     }
-    // App 重启后内存无 Child：读持久化 pid
-    if let Ok(raw) = fs::read_to_string(sidecar_pid_path()) {
-        if let Ok(pid) = raw.trim().parse::<i32>() {
-            desktop_log(&format!("stop sidecar from pidfile pid={pid}"));
-            stop_pid(pid);
-            clear_sidecar_pid();
+    match spawn_node_agent(runtime) {
+        Ok(child) => {
+            write_pid("node-agent", child.id());
+            if let Ok(mut g) = NODE_AGENT.lock() {
+                *g = Some(child);
+            }
+            desktop_log("node-agent started");
         }
+        Err(e) => desktop_log(&format!("node-agent spawn failed err={e}")),
     }
-    STARTED_BY_APP.store(false, Ordering::SeqCst);
 }
 
 fn set_status(app: &AppHandle, text: &str) {
@@ -244,7 +377,10 @@ fn set_status(app: &AppHandle, text: &str) {
 }
 
 fn serde_json_string(text: &str) -> String {
-    let escaped = text.replace('\\', "\\\\").replace('\'', "\\'").replace('\n', " ");
+    let escaped = text
+        .replace('\\', "\\\\")
+        .replace('\'', "\\'")
+        .replace('\n', " ");
     format!("'{escaped}'")
 }
 
@@ -259,8 +395,6 @@ fn eval_main(app: &AppHandle, js: &str) {
 }
 
 fn navigate_home(app: &AppHandle) {
-    // WKWebView 会记住升级前的首页。旧 HTML 去拉已经不存在的 chunk，页面就停在「正在进入工作区…」。
-    // 先清站点数据，再用一次性查询参数打开，避免命中旧缓存。
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -305,16 +439,20 @@ fn boot(app: AppHandle) {
 
     if api_ok() {
         desktop_log("reuse existing api");
+        maybe_start_node_agent(&runtime);
         warn_protocol(&app);
-        set_status(&app, "检测到已运行的节点服务，正在打开控制台。关闭窗口不会停止任务。");
+        set_status(
+            &app,
+            "检测到已运行的节点服务，正在打开控制台。关闭窗口不会停止任务。",
+        );
         navigate_home(&app);
         return;
     }
 
-    set_status(&app, "正在启动 FastAPI sidecar…");
+    set_status(&app, "正在启动本地核心…");
     match spawn_backend(&runtime) {
         Ok(child) => {
-            write_sidecar_pid(child.id());
+            write_pid("core", child.id());
             STARTED_BY_APP.store(true, Ordering::SeqCst);
             if let Ok(mut g) = BACKEND.lock() {
                 *g = Some(child);
@@ -322,7 +460,10 @@ fn boot(app: AppHandle) {
         }
         Err(e) => {
             desktop_log(&format!("spawn failed err={e}"));
-            set_status(&app, &format!("启动失败：{e}。请查看 ~/Library/Logs/AgentCenter/desktop.log"));
+            set_status(
+                &app,
+                &format!("启动失败：{e}。请查看 ~/Library/Logs/AgentCenter/desktop.log"),
+            );
             return;
         }
     }
@@ -330,13 +471,14 @@ fn boot(app: AppHandle) {
     let start = Instant::now();
     while start.elapsed() < Duration::from_secs(90) {
         if api_ok() {
+            maybe_start_node_agent(&runtime);
             warn_protocol(&app);
             navigate_home(&app);
             return;
         }
         thread::sleep(Duration::from_millis(400));
     }
-    desktop_log("sidecar health timeout");
+    desktop_log("core health timeout");
     set_status(
         &app,
         "启动超时。请查看 ~/Library/Logs/AgentCenter/sidecar.log",
@@ -345,8 +487,8 @@ fn boot(app: AppHandle) {
 
 #[tauri::command]
 fn stop_node_service() -> String {
-    desktop_log("explicit stop node service");
-    stop_backend();
+    desktop_log("explicit stop Core + Node Agent");
+    stop_all_services();
     "stopped".to_string()
 }
 

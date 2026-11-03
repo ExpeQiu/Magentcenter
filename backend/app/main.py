@@ -62,6 +62,10 @@ async def lifespan(app: FastAPI):
     await create_tables()
     await backfill_task_owners(ident.center_id)
     recovered = await recover()
+    if settings.normalized_profile() in {"full", "edge"}:
+        from app.core.node_bootstrap import ensure_local_node_credential
+
+        await ensure_local_node_credential("full" if settings.normalized_profile() == "full" else "edge")
     logger.info(
         "autonomy ready profile=%s center_id=%s node_id=%s recovered=%s slots=%s",
         settings.normalized_profile(),
@@ -295,6 +299,8 @@ def create_app() -> FastAPI:
             deploy_profile=settings.normalized_profile(),
             protocol_version=2,
             center_id=app.state.center_id if hasattr(app.state, "center_id") else "",
+            execution_slots=settings.execution_slots(),
+            cloud_inbound_slots=int(settings.cloud_inbound_slots or 0),
         )
 
     app.include_router(agents.router)

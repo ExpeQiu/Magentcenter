@@ -17,16 +17,58 @@
         flex-direction: column;
         align-items: center;
         justify-content: center;
-        gap: 8px;
+        gap: 12px;
       }
       h1 { font-size: 20px; font-weight: 600; margin: 0; }
-      p { font-size: 13px; color: #94a3b8; margin: 0; }
+      p { font-size: 13px; color: #94a3b8; margin: 0; text-align: center; max-width: 28rem; }
+      button {
+        margin-top: 8px;
+        background: #1e293b;
+        color: #e2e8f0;
+        border: 1px solid #334155;
+        border-radius: 6px;
+        padding: 8px 14px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      button:hover { background: #334155; }
+      button:disabled { opacity: 0.5; cursor: default; }
     </style>
   </head>
   <body>
     <main>
       <h1>AgentCenter</h1>
       <p id="status">正在启动本地 API…</p>
+      <p>关闭窗口不会停止本地核心与 Node Agent。</p>
+      <button id="stop" type="button">停止本地服务</button>
     </main>
+    <script>
+      (function () {
+        var btn = document.getElementById("stop");
+        var status = document.getElementById("status");
+        function invokeStop() {
+          btn.disabled = true;
+          status.textContent = "正在停止本地服务…";
+          var inv = window.__TAURI_INTERNALS__ && window.__TAURI_INTERNALS__.invoke;
+          if (!inv && window.__TAURI__ && window.__TAURI__.core) {
+            inv = window.__TAURI__.core.invoke.bind(window.__TAURI__.core);
+          }
+          if (!inv) {
+            status.textContent = "非桌面壳环境，请用 scripts/stop.sh 停止。";
+            btn.disabled = false;
+            return;
+          }
+          Promise.resolve(inv("stop_node_service"))
+            .then(function () {
+              status.textContent = "本地服务已停止。可关闭窗口或重新打开 App。";
+            })
+            .catch(function (e) {
+              status.textContent = "停止失败：" + (e && e.message ? e.message : e);
+              btn.disabled = false;
+            });
+        }
+        btn.addEventListener("click", invokeStop);
+      })();
+    </script>
   </body>
 </html>

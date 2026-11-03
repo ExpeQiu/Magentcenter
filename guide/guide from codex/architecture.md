@@ -194,13 +194,15 @@ fleet-edge（plugin / webhook）
 
 本节为当前 `cloud` profile 的部署边界。目标允许挂接隔离的云端 worker 和授权内容副本，属于后续增量，不在协调器内启用本机 CLI 或挂载私人目录。
 
+运维步骤、目录约定、systemd 与验收见 [cloud-deploy.md](../cloud-deploy.md)。现网默认：`root@47.113.225.93`，监听 **8080**，应用 `/opt/agentcenter/app`，数据 `/opt/agentcenter/data`，进程 `agentcenter-cloud.service`；本机用 `scripts/deploy-cloud.sh` / `backup-cloud.sh` / `verify-cloud.sh`。
+
 `DEPLOY_PROFILE=cloud` 只跑协调器。执行槽位为 0，不扫描本机 OpenClaw / Hermes，能力声明只有 `conversation.text`。
 
 云上保留：超级AI 全局入口、云端任务、设备名册与登记、跨端路由、可靠消息、四类身份、审计、协调器健康。控制台对应超级AI、云端任务、多端、信息链、协调器状态。
 
 本机完整版（`full`）才有：执行器、知识库、技能正文、输出物、小队、Autopilot、Kanban、本机会话、Gateway/Cron、桌面。上文「扫描协调器上的 OpenClaw / Hermes 并由协调器本机执行」只属于 `full`。
 
-云端数据在服务器本地盘。个人目录不挂载，WaytoAI 全量同步不进入云端注册流程。
+云端数据在服务器本地盘。个人目录不挂载，WaytoAI 全量同步不进入云端注册流程。执行走远端节点或独立 `cloud-worker`，不以协调器内开槽为默认。
 
 ## 多端自治
 

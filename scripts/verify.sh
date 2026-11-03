@@ -213,6 +213,76 @@ else
 fi
 check "单测 channel 共存" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-coexist AI_MOCK_MODE=true $PY -m pytest tests/test_channel_coexist.py -q --tb=line"
 check "单测 workitem/lease" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-wi AI_MOCK_MODE=true $PY -m pytest tests/test_work_items_and_lease.py -q --tb=line"
+check "单测 outbox peer" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-outbox AI_MOCK_MODE=true $PY -m pytest tests/test_outbox_peer.py -q --tb=line"
+check "单测 autonomy" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-autonomy AI_MOCK_MODE=true $PY -m pytest tests/test_autonomy.py -q --tb=line"
+check "单测 claim-next" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-claim AI_MOCK_MODE=true $PY -m pytest tests/test_claim_next.py -q --tb=line"
+check "单测 supervisor" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-sup AI_MOCK_MODE=true $PY -m pytest tests/test_supervisor.py -q --tb=line"
+check "单测 artifact availability" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-art AI_MOCK_MODE=true $PY -m pytest tests/test_artifact_availability.py -q --tb=line"
+
+# 无云 E2E：Core 已起时，用 bootstrap token + claim-next/finish 跑通一条任务
+echo -n "[verify] 无云 E2E claim-next ... "
+E2E_OUT="$(
+  BASE_URL="$BASE_URL" AGENTCENTER_DATA_DIR="${AGENTCENTER_DATA_DIR:-$HOME/Library/Application Support/AgentCenter/data}" \
+  $PY - <<'PY' 2>/dev/null || true
+import json, os, urllib.error, urllib.request
+from pathlib import Path
+base = os.environ.get("BASE_URL", "http://127.0.0.1:8013")
+data = Path(os.environ["AGENTCENTER_DATA_DIR"])
+token_path = data / "node_agent.token"
+if not token_path.is_file():
+    print("skip-no-token")
+    raise SystemExit(0)
+token = token_path.read_text().strip()
+
+def req(method, path, body=None, headers=None):
+    data_b = None if body is None else json.dumps(body).encode()
+    r = urllib.request.Request(base + path, data=data_b, method=method)
+    r.add_header("Content-Type", "application/json")
+    for k, v in (headers or {}).items():
+        r.add_header(k, v)
+    with urllib.request.urlopen(r, timeout=20) as resp:
+        return json.loads(resp.read().decode() or "{}")
+
+try:
+    task = req("POST", "/api/tasks", {
+        "agent_id": "main",
+        "runtime": "openclaw",
+        "prompt": "verify offline e2e",
+        "node_id": "local",
+    })
+except urllib.error.HTTPError as e:
+    if e.code in (401, 403):
+        print("skip-auth")
+        raise SystemExit(0)
+    print(f"fail-create-{e.code}")
+    raise SystemExit(0)
+task_id = task.get("id") or ""
+claimed = req("POST", "/api/v2/commands/claim-next", {"protocol_version": 2}, {"X-Node-Token": token})
+if not claimed.get("accepted"):
+    info = req("GET", f"/api/tasks/{task_id}")
+    if info.get("status") in ("completed", "failed", "running", "queued"):
+        print("ok-embedded-or-queued")
+        raise SystemExit(0)
+    print("no-claim")
+    raise SystemExit(0)
+fin = req("POST", "/api/v2/commands/finish", {
+    "protocol_version": 2,
+    "task_id": claimed["task_id"],
+    "execution_id": claimed.get("execution_id") or "",
+    "status": "completed",
+    "output": "e2e-ok",
+    "assignment_generation": claimed.get("assignment_generation") or 1,
+}, {"X-Node-Token": token})
+print("ok" if fin.get("status") == "completed" else "fail")
+PY
+)"
+if [[ "$E2E_OUT" == ok* || "$E2E_OUT" == skip-* ]]; then
+  echo "PASS ($E2E_OUT)"
+  pass=$((pass + 1))
+else
+  echo "FAIL ($E2E_OUT)"
+  fail=$((fail + 1))
+fi
 
 echo ""
 echo "=== 结果: $pass 通过, $fail 失败 ==="

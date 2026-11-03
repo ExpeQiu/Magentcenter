@@ -16,7 +16,13 @@ from app.core.autonomy_state import PROTOCOL_VERSION, ProtocolError, accept_prot
 from app.core.capabilities import catalog_for_profile
 from app.core.confirmations import ConfirmationError, attach_task, confirm as confirm_record
 from app.core.delegations import DelegationError, create_delegation
-from app.core.execution import ClaimError, claim_assigned, record_command_ack
+from app.core.execution import (
+    ClaimError,
+    claim_assigned,
+    claim_next,
+    finish_execution,
+    record_command_ack,
+)
 from app.core.identity import load_or_create_identity
 from app.core.observability import snapshot
 from app.core.sync_bus import SyncConflict, ingest
@@ -41,9 +47,12 @@ def openapi_document() -> dict:
         "/api/v2/enrollments",
         "/api/v2/nodes/enroll",
         "/api/v2/nodes/heartbeat",
+        "/api/v2/nodes/revoke-local",
         "/api/v2/delegations",
         "/api/v2/commands/claim",
+        "/api/v2/commands/claim-next",
         "/api/v2/commands/ack",
+        "/api/v2/commands/finish",
         "/api/v2/events/batch",
         "/api/v2/tasks/{id}/events",
         "/api/v2/tasks/{id}/cancel",
@@ -54,6 +63,7 @@ def openapi_document() -> dict:
     ]
     more = [
         "/api/v2/work-items",
+        "/api/v2/work-items/{id}",
         "/api/v2/work-items/{id}/accept",
         "/api/v2/attention",
         "/api/v2/executions/{id}/lease",
@@ -121,6 +131,18 @@ class ClaimRequest(BaseModel):
     task_id: str = ""
     delegation_id: str = ""
     attempt: int = 1
+
+
+class FinishRequest(BaseModel):
+    protocol_version: int = 2
+    task_id: str
+    execution_id: str = ""
+    status: str = "completed"
+    output: str = ""
+    error: str = ""
+    session_id: str = ""
+    duration_ms: int = 0
+    assignment_generation: int | None = None
 
 
 class BatchRequest(BaseModel):
@@ -243,6 +265,18 @@ async def heartbeat(
     return {"node_id": node.node_id, "role": node.role, "catalog": listed, "reported": req.capabilities}
 
 
+@router.post("/nodes/revoke-local")
+async def revoke_local_node(request: Request) -> dict:
+    """本机显式撤销 Node Agent 凭证；本地 Core 功能保留。仅 loopback。"""
+    host = request.client.host if request.client else ""
+    if host not in {"127.0.0.1", "::1"}:
+        raise HTTPException(status_code=403, detail="revoke-local is loopback only")
+    from app.core.node_bootstrap import revoke_local_node_credential
+
+    await revoke_local_node_credential()
+    return {"ok": True, "revoked": True}
+
+
 @router.post("/delegations", status_code=201)
 async def post_delegation(
     req: DelegationRequest,
@@ -317,6 +351,47 @@ async def claim_command(
         )
         raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     return claimed
+
+
+@router.post("/commands/claim-next")
+async def claim_next_command(
+    req: ClaimRequest | None = None,
+    x_node_token: str = Header(default=""),
+) -> dict:
+    body = req or ClaimRequest()
+    _check_protocol(body.protocol_version)
+    node = await _node_from_token(x_node_token)
+    if node.role not in _CLAIM_ROLES:
+        raise HTTPException(status_code=403, detail="role cannot claim executions")
+    claimed = await claim_next(node.node_id)
+    if claimed is None:
+        return {"accepted": False, "task": None}
+    return claimed
+
+
+@router.post("/commands/finish")
+async def finish_command(
+    req: FinishRequest,
+    x_node_token: str = Header(default=""),
+) -> dict:
+    _check_protocol(req.protocol_version)
+    node = await _node_from_token(x_node_token)
+    if node.role not in _CLAIM_ROLES:
+        raise HTTPException(status_code=403, detail="role cannot finish executions")
+    try:
+        return await finish_execution(
+            node.node_id,
+            task_id=req.task_id,
+            execution_id=req.execution_id,
+            status=req.status,
+            output=req.output,
+            error=req.error,
+            session_id=req.session_id,
+            duration_ms=req.duration_ms,
+            generation=req.assignment_generation,
+        )
+    except ClaimError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.post("/commands/ack")
@@ -489,6 +564,30 @@ async def create_work(req: WorkItemCreate) -> dict:
         task_id=req.task_id,
     )
     return {"id": wid, **((await wi.get_work_item(wid)) or {})}
+
+
+@router.get("/work-items")
+async def list_works(
+    workspace_id: str = "",
+    status: str = "",
+    limit: int = 50,
+) -> dict:
+    from app.core import work_items as wi
+
+    items = await wi.list_work_items(
+        workspace_id=workspace_id, status=status, limit=limit
+    )
+    return {"items": items, "count": len(items)}
+
+
+@router.get("/work-items/{work_item_id}")
+async def get_work(work_item_id: str) -> dict:
+    from app.core import work_items as wi
+
+    row = await wi.get_work_item(work_item_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="work item not found")
+    return row
 
 
 @router.post("/work-items/{work_item_id}/accept")

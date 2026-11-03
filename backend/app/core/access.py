@@ -23,6 +23,10 @@ _PUBLIC_PATHS = {
     "/api/session/unlock",
     "/api/v2/openapi.json",
     "/api/v2/nodes/enroll",
+    "/api/v2/enrollments",
+    "/api/fleet/enroll",
+    "/api/fleet/handshake",
+    "/api/fleet/handshake/accept",
     "/api/super-ai/device/enroll",
     "/api/super-ai/device/pair",
     "/api/super-ai/device/pair/status",
@@ -36,8 +40,12 @@ _NODE_RULES = (
     ("POST", re.compile(r"^/api/v2/nodes/heartbeat$")),
     ("POST", re.compile(r"^/api/v2/delegations$")),
     ("POST", re.compile(r"^/api/v2/commands/claim$")),
+    ("POST", re.compile(r"^/api/v2/commands/claim-next$")),
+    ("POST", re.compile(r"^/api/v2/commands/finish$")),
     ("POST", re.compile(r"^/api/v2/commands/ack$")),
     ("POST", re.compile(r"^/api/v2/events/batch$")),
+    ("POST", re.compile(r"^/api/v2/executions/[^/]+/lease$")),
+    ("POST", re.compile(r"^/api/v2/executions/[^/]+/delivery-ack$")),
 )
 _DEVICE_RULES = (
     ("POST", re.compile(r"^/api/super-ai/device/turn$")),

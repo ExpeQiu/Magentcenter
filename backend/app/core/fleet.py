@@ -1194,9 +1194,13 @@ async def claim(token: str) -> dict[str, Any] | None:
                 "system_prompt": task.system_prompt or "",
                 "session_id": task.session_id or "",
             }
-    from app.core.execution import accept_remote
+    from app.core.execution import ClaimError, accept_remote
 
-    fresh = await accept_remote(payload["id"], rec.id, attempt=1)
+    try:
+        fresh = await accept_remote(payload["id"], rec.id, attempt=1)
+    except ClaimError as exc:
+        logger.warning("fleet claim accept_remote denied task=%s detail=%s", payload["id"], exc)
+        return None
     if not fresh:
         logger.info("fleet claim already received task=%s node=%s", payload["id"], rec.id)
     logger.info(

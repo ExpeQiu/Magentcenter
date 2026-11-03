@@ -108,3 +108,60 @@ def test_router_and_watchdog():
         assert advice.kind == "suggest_pause"
 
     asyncio.run(scenario())
+
+
+def test_legacy_work_items_table_rebuild(db):
+    import sqlite3
+
+    from sqlalchemy import select
+
+    from app.models.db import WorkItemRecord
+
+    path = db / "legacy-wi.db"
+    conn = sqlite3.connect(path)
+    conn.execute(
+        """
+        CREATE TABLE work_items (
+            id VARCHAR(36) NOT NULL,
+            owner_id VARCHAR(128) NOT NULL,
+            workspace_id VARCHAR(64) NOT NULL,
+            conversation_id VARCHAR(128) NOT NULL,
+            title VARCHAR(256) NOT NULL,
+            goal TEXT NOT NULL,
+            state VARCHAR(32) NOT NULL,
+            state_version INTEGER NOT NULL,
+            priority INTEGER NOT NULL,
+            requirements_revision INTEGER NOT NULL,
+            plan_revision INTEGER NOT NULL,
+            target_json TEXT NOT NULL,
+            constraints_json TEXT NOT NULL,
+            waiting_reason TEXT NOT NULL,
+            question_id VARCHAR(128) NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY (id)
+        )
+        """
+    )
+    conn.execute(
+        "INSERT INTO work_items VALUES ("
+        "'w-legacy','owner','ws-cyber','conv','旧标题','旧目标','waiting',3,0,4,1,"
+        "'{}','{}','need-confirm','q1',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"
+    )
+    conn.commit()
+    conn.close()
+    init_db(f"sqlite+aiosqlite:///{path}")
+
+    async def scenario():
+        await create_tables()
+        factory = get_session_factory()
+        async with factory() as session:
+            rows = (await session.execute(select(WorkItemRecord))).scalars().all()
+            assert len(rows) == 1
+            assert rows[0].id == "w-legacy"
+            assert rows[0].status == "waiting"
+            assert rows[0].wait_reason == "need-confirm"
+            assert rows[0].requirement_revision == 4
+            assert rows[0].owner_center_id == ""
+
+    asyncio.run(scenario())

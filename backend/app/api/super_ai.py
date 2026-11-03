@@ -52,6 +52,14 @@ async def put_provider(req: SuperAiProviderUpdate) -> dict:
     )
 
 
+@router.get("/session/{session_id}")
+async def session_history(session_id: str) -> dict:
+    from app.core import super_ai_session as sessions
+
+    items = await sessions.recent(session_id)
+    return {"session_id": session_id, "messages": items}
+
+
 @router.post("/turn", response_model=SuperAiTurnResponse)
 async def turn(req: SuperAiTurnRequest, request: Request) -> SuperAiTurnResponse:
     result = await handle_turn(

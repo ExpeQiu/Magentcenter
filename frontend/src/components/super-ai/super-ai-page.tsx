@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Avatar, type AvatarPhase } from "@/components/super-ai/avatar";
 import {
   api,
@@ -45,6 +45,9 @@ const CHIPS = ["有哪些进行中的任务", "有哪些技能", "系统是否�
 const MOCK_UTTERANCE = "有哪些进行中的任务";
 const THREAD_KEY = "super-ai-thread";
 const SESSION_KEY = "super-ai-session";
+const INPUT_MODE_KEY = "super-ai-input-mode";
+
+type InputMode = "voice" | "text";
 
 const TASK_LABEL: Record<string, string> = {
   queued: "排队",
@@ -125,6 +128,7 @@ export function SuperAiPage() {
   const [providerNote, setProviderNote] = useState("");
   const [busy, setBusy] = useState(false);
   const [voiceHint, setVoiceHint] = useState("");
+  const [inputMode, setInputMode] = useState<InputMode>("voice");
   const scroller = useRef<HTMLDivElement>(null);
   const recRef = useRef<SpeechRec | null>(null);
   const heardRef = useRef("");
@@ -132,7 +136,30 @@ export function SuperAiPage() {
 
   useEffect(() => {
     setSlug(getLastWorkspaceSlug());
-    setMessages(loadThread());
+    const local = loadThread();
+    setMessages(local);
+    try {
+      const saved = sessionStorage.getItem(INPUT_MODE_KEY);
+      if (saved === "text" || saved === "voice") setInputMode(saved);
+    } catch {
+      /* ignore */
+    }
+    const sid = sessionId();
+    api
+      .superAiSession(sid)
+      .then((row) => {
+        const remote = (row.messages || [])
+          .filter((m) => m.role === "user" || m.role === "assistant")
+          .map((m) => ({
+            id: newId(),
+            role: m.role as "user" | "assistant",
+            text: m.text || "",
+          }));
+        if (remote.length) setMessages(remote.slice(-20));
+      })
+      .catch(() => {
+        /* 无持久会话时保留 sessionStorage */
+      });
     api
       .health()
       .then((h) => setMockMode(Boolean(h.mock_mode)))
@@ -150,9 +177,19 @@ export function SuperAiPage() {
   }, []);
 
   useEffect(() => {
+    try {
+      sessionStorage.setItem(INPUT_MODE_KEY, inputMode);
+    } catch {
+      /* ignore */
+    }
+  }, [inputMode]);
+
+  useEffect(() => {
     sessionStorage.setItem(THREAD_KEY, JSON.stringify(messages.slice(-20)));
-    scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
-  }, [messages]);
+    if (inputMode === "text") {
+      scroller.current?.scrollTo({ top: scroller.current.scrollHeight });
+    }
+  }, [messages, inputMode]);
 
   function speak(text: string) {
     const synth = window.speechSynthesis;
@@ -374,18 +411,68 @@ export function SuperAiPage() {
   const shown = messages.length
     ? messages
     : [{ id: "greet", role: "assistant" as const, text: GREETING }];
+  const lastAssistant =
+    [...messages].reverse().find((m) => m.role === "assistant")?.text ||
+    (messages.length === 0 ? GREETING : "");
+
+  function switchMode(next: InputMode) {
+    setInputMode(next);
+    setVoiceHint("");
+    if (next === "voice") {
+      window.speechSynthesis?.cancel();
+      setPhase("idle");
+    }
+  }
+
+  const modeToggle = (
+    <div className="flex rounded-lg border border-slate-700 p-0.5 text-sm">
+      <button
+        type="button"
+        onClick={() => switchMode("voice")}
+        className={`rounded-md px-3 py-1.5 ${
+          inputMode === "voice"
+            ? "bg-indigo-600 text-white"
+            : "text-slate-400 hover:text-slate-200"
+        }`}
+      >
+        语音
+      </button>
+      <button
+        type="button"
+        onClick={() => switchMode("text")}
+        className={`rounded-md px-3 py-1.5 ${
+          inputMode === "text"
+            ? "bg-indigo-600 text-white"
+            : "text-slate-400 hover:text-slate-200"
+        }`}
+      >
+        文字
+      </button>
+    </div>
+  );
+
+  const holdProps = {
+    onPointerDown: (e: ReactPointerEvent<HTMLButtonElement>) => {
+      e.preventDefault();
+      e.currentTarget.setPointerCapture(e.pointerId);
+      holdStart();
+    },
+    onPointerUp: holdEnd,
+    onPointerCancel: holdEnd,
+  };
 
   return (
-    <div className="flex h-screen flex-col bg-slate-950">
-      <header className="flex items-center justify-between border-b border-slate-800 px-5 py-3">
-        <div>
+    <div className="flex h-svh flex-col bg-slate-950">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-800 px-4 py-3 sm:px-5">
+        <div className="min-w-0">
           <p className="text-xs tracking-widest text-indigo-300/80">AGENTCENTER</p>
           <h1 className="text-lg font-semibold">超级AI</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          {modeToggle}
           <Link
             href="/bind"
-            className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
+            className="hidden rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800 sm:inline-block"
           >
             绑定终端
           </Link>
@@ -400,7 +487,7 @@ export function SuperAiPage() {
             href={paths.root(slug)}
             className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm text-slate-300 hover:bg-slate-800"
           >
-            进入控制台
+            控制台
           </Link>
         </div>
       </header>
@@ -446,13 +533,70 @@ export function SuperAiPage() {
         </form>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(280px,420px)_1fr]">
-        <section className="flex items-center justify-center border-b border-slate-800 py-8 lg:border-b-0 lg:border-r">
-          <Avatar phase={phase} />
+      {inputMode === "voice" ? (
+        <section className="flex min-h-0 flex-1 flex-col items-center justify-center px-5 pb-8 pt-4">
+          <Avatar phase={phase} size="hero" />
+          <p className="mt-6 max-w-md text-center text-sm leading-relaxed text-slate-300">
+            {busy
+              ? "处理中…"
+              : phase === "listening"
+                ? "松手结束录音"
+                : lastAssistant.length > 160
+                  ? `${lastAssistant.slice(0, 159)}…`
+                  : lastAssistant}
+          </p>
+          {pending ? (
+            <div className="mt-4 flex max-w-md items-center gap-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+              <span className="truncate">待确认：{pending.prompt}</span>
+              <button type="button" onClick={() => void send("确认", true)} className="underline">
+                确认
+              </button>
+              <button type="button" onClick={() => void send("取消", true)} className="underline">
+                取消
+              </button>
+            </div>
+          ) : null}
+          <button
+            type="button"
+            aria-label="按住说话"
+            disabled={busy}
+            {...holdProps}
+            className={`mt-8 flex h-24 w-24 touch-none select-none items-center justify-center rounded-full text-sm font-medium shadow-lg transition disabled:opacity-40 ${
+              phase === "listening"
+                ? "scale-105 bg-rose-600 text-white ring-8 ring-rose-400/30"
+                : "bg-indigo-600 text-white hover:bg-indigo-500"
+            }`}
+          >
+            {phase === "listening" ? "松开" : "按住说"}
+          </button>
+          {voiceHint ? (
+            <p className="mt-4 text-center text-xs text-slate-500">{voiceHint}</p>
+          ) : (
+            <p className="mt-4 text-center text-xs text-slate-500">
+              默认语音对话 · 需要打字时点右上角「文字」
+            </p>
+          )}
+          {messages.length === 0 ? (
+            <div className="mt-6 flex max-w-lg flex-wrap justify-center gap-2">
+              {CHIPS.map((chip) => (
+                <button
+                  key={chip}
+                  type="button"
+                  onClick={() => void send(chip, true)}
+                  className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-400 hover:bg-slate-800"
+                >
+                  {chip}
+                </button>
+              ))}
+            </div>
+          ) : null}
         </section>
-
-        <section className="flex min-h-0 flex-col">
-          <div ref={scroller} className="flex-1 space-y-3 overflow-y-auto px-5 py-4">
+      ) : (
+        <section className="flex min-h-0 flex-1 flex-col">
+          <div className="flex shrink-0 justify-center border-b border-slate-800 py-4">
+            <Avatar phase={phase} size="compact" />
+          </div>
+          <div ref={scroller} className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-5">
             {shown.map((msg) => (
               <div
                 key={msg.id}
@@ -524,26 +668,20 @@ export function SuperAiPage() {
                   }
                 }}
                 rows={2}
-                placeholder="输入文字，或按住说话"
+                placeholder="输入文字…"
                 className="min-h-14 flex-1 resize-none rounded-xl border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-indigo-500"
               />
               <button
                 type="button"
                 aria-label="按住说话"
-                onPointerDown={(e) => {
-                  e.preventDefault();
-                  (e.currentTarget as HTMLButtonElement).setPointerCapture(e.pointerId);
-                  holdStart();
-                }}
-                onPointerUp={holdEnd}
-                onPointerCancel={holdEnd}
+                {...holdProps}
                 className={`h-14 rounded-xl px-4 text-sm ${
                   phase === "listening"
                     ? "bg-rose-600 text-white"
                     : "bg-slate-800 text-slate-200 hover:bg-slate-700"
                 }`}
               >
-                按住说话
+                按住说
               </button>
               <button
                 type="submit"
@@ -556,7 +694,7 @@ export function SuperAiPage() {
             {voiceHint ? <p className="mt-2 text-xs text-slate-500">{voiceHint}</p> : null}
           </form>
         </section>
-      </div>
+      )}
     </div>
   );
 }

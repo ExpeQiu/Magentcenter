@@ -1,8 +1,11 @@
 #!/usr/bin/env bash
-# AgentCenter 启动脚本
+# AgentCenter 启动脚本：本地核心（+ 可选 Node Agent）
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck disable=SC1091
+source "$ROOT/scripts/lib-pids.sh"
+
 BACKEND="$ROOT/backend"
 VENV="$BACKEND/.venv"
 APP_SUPPORT="${HOME}/Library/Application Support/AgentCenter"
@@ -14,12 +17,11 @@ if [[ ! -f "$AGENTCENTER_DATA_DIR/agentcenter.db" && -f "$BACKEND/data/agentcent
   echo "[start] 数据库已复制到本机应用目录"
 fi
 export DATABASE_URL="${DATABASE_URL:-sqlite+aiosqlite:///${AGENTCENTER_DATA_DIR}/agentcenter.db}"
-PID_FILE="$AGENTCENTER_DATA_DIR/agentcenter.pid"
 LOG_FILE="$AGENTCENTER_LOG_DIR/agentcenter.log"
+NODE_LOG="$AGENTCENTER_LOG_DIR/node-agent.log"
 
 cd "$ROOT"
 
-# 已导出的环境变量优先于 .env（便于 verify 强制 AI_MOCK_MODE=true）
 _PRESERVE_AI_MOCK_MODE="${AI_MOCK_MODE-__UNSET__}"
 _PRESERVE_RUNTIMES="${RUNTIMES-__UNSET__}"
 _PRESERVE_DEFAULT_RUNTIME="${DEFAULT_RUNTIME-__UNSET__}"
@@ -73,36 +75,66 @@ PORT="${PORT:-8013}"
 HOST="${HOST:-127.0.0.1}"
 
 if curl -sf --max-time 3 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
-  echo "[start] 节点服务已在运行，不重复启动"
-  exit 0
-fi
-if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-  echo "[start] 端口 $PORT 已被占用，但健康检查未通过。启动不会按端口结束占用进程。"
-  exit 1
-fi
-
-echo "[start] 启动 AgentCenter API (host=$HOST port=$PORT profile=${DEPLOY_PROFILE:-full})..."
-cd "$BACKEND"
-nohup "$VENV/bin/uvicorn" app.main:app --host "$HOST" --port "$PORT" \
-  >> "$LOG_FILE" 2>&1 </dev/null &
-echo $! > "$PID_FILE"
-disown 2>/dev/null || true
-
-# 等待端口就绪并验证 health
-for i in $(seq 1 20); do
+  echo "[start] 节点服务已在运行，不重复启动 Core"
+else
   if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
-    pid=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)
-    echo "$pid" > "$PID_FILE"
-    if curl -sf --max-time 3 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
-      echo "[start] AgentCenter 已启动 PID=$pid"
-      echo "[start] API: http://localhost:$PORT/api/health"
-      echo "[start] 日志: $LOG_FILE"
-      exit 0
-    fi
+    echo "[start] 端口 $PORT 已被占用，但健康检查未通过。启动不会按端口结束占用进程。"
+    exit 1
   fi
-  sleep 1
-done
 
-echo "[start] 启动失败，查看日志: $LOG_FILE"
-tail -15 "$LOG_FILE" 2>/dev/null || true
-exit 1
+  echo "[start] 启动 AgentCenter API (host=$HOST port=$PORT profile=${DEPLOY_PROFILE:-full})..."
+  cd "$BACKEND"
+  nohup "$VENV/bin/uvicorn" app.main:app --host "$HOST" --port "$PORT" \
+    >> "$LOG_FILE" 2>&1 </dev/null &
+  _ac_write_pid core $!
+  disown 2>/dev/null || true
+
+  for i in $(seq 1 20); do
+    if lsof -nP -iTCP:"$PORT" -sTCP:LISTEN >/dev/null 2>&1; then
+      pid=$(lsof -tiTCP:"$PORT" -sTCP:LISTEN 2>/dev/null | head -1)
+      _ac_write_pid core "$pid"
+      if curl -sf --max-time 3 "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+        echo "[start] Core 已启动 PID=$pid"
+        echo "[start] API: http://localhost:$PORT/api/health"
+        echo "[start] 日志: $LOG_FILE"
+        break
+      fi
+    fi
+    if [[ "$i" -eq 20 ]]; then
+      echo "[start] 启动失败，查看日志: $LOG_FILE"
+      tail -15 "$LOG_FILE" 2>/dev/null || true
+      exit 1
+    fi
+    sleep 1
+  done
+fi
+
+# 可选拉起 Node Agent
+START_NODE_AGENT="${START_NODE_AGENT:-auto}"
+want_node=0
+case "$(echo "$START_NODE_AGENT" | tr '[:upper:]' '[:lower:]')" in
+  on|1|true|yes) want_node=1 ;;
+  off|0|false|no) want_node=0 ;;
+  *)
+    if [[ -n "${FLEET_ENROLL_TOKEN:-}" ]]; then
+      want_node=1
+    fi
+    ;;
+esac
+
+if [[ "$want_node" -eq 1 ]]; then
+  if [[ -f "$AGENTCENTER_DATA_DIR/node-agent.pid" ]] && kill -0 "$(tr -d '[:space:]' <"$AGENTCENTER_DATA_DIR/node-agent.pid")" 2>/dev/null; then
+    echo "[start] Node Agent 已在运行"
+  else
+    echo "[start] 拉起 Node Agent…"
+    export AGENTCENTER_URL="${AGENTCENTER_URL:-http://127.0.0.1:$PORT}"
+    nohup "$ROOT/scripts/run-node-agent.sh" >>"$NODE_LOG" 2>&1 </dev/null &
+    _ac_write_pid node-agent $!
+    disown 2>/dev/null || true
+    echo "[start] Node Agent PID=$(tr -d '[:space:]' <"$AGENTCENTER_DATA_DIR/node-agent.pid") 日志=$NODE_LOG"
+  fi
+else
+  echo "[start] 跳过 Node Agent（设 START_NODE_AGENT=on 且配置 FLEET_ENROLL_TOKEN 可启用）"
+fi
+
+exit 0

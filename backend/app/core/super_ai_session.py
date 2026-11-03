@@ -1,4 +1,4 @@
-"""超级AI 的短会话。只留最近几轮，供模型接着说。"""
+"""超级AI 会话：JSON 热缓存 + conversations 表持久化（重启可续）。"""
 
 from __future__ import annotations
 
@@ -65,7 +65,18 @@ async def recent(session_id: str) -> list[dict[str, str]]:
     key = (session_id or "").strip()
     if not key:
         return []
-    return list(_load().get(key) or [])
+    cached = list(_load().get(key) or [])
+    if cached:
+        return cached
+    # 回退到 DB conversations
+    try:
+        from app.core.work_items import list_conversation_messages
+
+        rows = await list_conversation_messages(key, limit=_LIMIT * 2)
+        return [{"role": r["role"], "text": r["content"]} for r in rows if r.get("content")]
+    except Exception:
+        logger.exception("super_ai session db load failed session=%s", key[:12])
+        return []
 
 
 async def remember(session_id: str, user_text: str, reply: str) -> None:
@@ -85,4 +96,14 @@ async def remember(session_id: str, user_text: str, reply: str) -> None:
         for old in list(data)[:-40]:
             data.pop(old, None)
     _save(data)
+    try:
+        from app.core.work_items import append_message, ensure_conversation
+
+        await ensure_conversation(key, title="超级AI")
+        if user:
+            await append_message(key, role="user", content=user, channel="super-ai")
+        if answer:
+            await append_message(key, role="assistant", content=answer, channel="super-ai")
+    except Exception:
+        logger.exception("super_ai conversation persist failed session=%s", key[:12])
     logger.info("super_ai session session=%s messages=%d", key[:12], len(data[key]))

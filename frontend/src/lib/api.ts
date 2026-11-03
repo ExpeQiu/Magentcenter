@@ -34,6 +34,7 @@ import type {
   FleetScan,
   TaskInfo,
   TaskListResponse,
+  WorkItemInfo,
   WorkspaceInfo,
 } from "./types";
 
@@ -240,6 +241,27 @@ export const api = {
     return request<TaskListResponse>(`/api/tasks?${q}`);
   },
   task: (id: string) => request<TaskInfo>(`/api/tasks/${id}`),
+  workItems: (opts?: { workspaceId?: string; status?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (opts?.workspaceId) q.set("workspace_id", opts.workspaceId);
+    if (opts?.status) q.set("status", opts.status);
+    if (opts?.limit) q.set("limit", String(opts.limit));
+    const qs = q.toString();
+    return request<{ items: WorkItemInfo[]; count: number }>(
+      `/api/v2/work-items${qs ? `?${qs}` : ""}`
+    );
+  },
+  workItem: (id: string) =>
+    request<WorkItemInfo>(`/api/v2/work-items/${encodeURIComponent(id)}`),
+  acceptWorkItem: (id: string, artifactId = "") => {
+    const q = artifactId
+      ? `?artifact_id=${encodeURIComponent(artifactId)}`
+      : "";
+    return request<WorkItemInfo>(
+      `/api/v2/work-items/${encodeURIComponent(id)}/accept${q}`,
+      { method: "POST" }
+    );
+  },
   chain: (taskId: string) =>
     request<ChainEvent[]>(`/api/chain?task_id=${encodeURIComponent(taskId)}`),
   createTask: (data: {
@@ -738,6 +760,10 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     }),
+  superAiSession: (sessionId: string) =>
+    request<{ session_id: string; messages: { role: string; text: string }[] }>(
+      `/api/super-ai/session/${encodeURIComponent(sessionId)}`
+    ),
   superAiProvider: () => request<SuperAiProvider>("/api/super-ai/provider"),
   superAiProviderUpdate: (body: SuperAiProviderUpdate) =>
     request<SuperAiProvider>("/api/super-ai/provider", {
