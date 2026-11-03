@@ -1,0 +1,16 @@
+[project]
+name = "agentcenter-node-agent"
+version = "0.1.0"
+description = "AgentCenter PC/edge Node Agent (execution connector)"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+agentcenter-node = "agentcenter_node.main:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

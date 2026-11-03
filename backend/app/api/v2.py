@@ -52,18 +52,35 @@ def openapi_document() -> dict:
         "/api/v2/openapi.json",
         "/api/v2/metrics",
     ]
+    more = [
+        "/api/v2/work-items",
+        "/api/v2/work-items/{id}/accept",
+        "/api/v2/attention",
+        "/api/v2/executions/{id}/lease",
+        "/api/v2/executions/{id}/delivery-ack",
+        "/api/v2/hardware/commands",
+        "/api/v2/channels/interrupt",
+    ]
+    all_paths = paths + [p for p in more if p not in paths]
     return {
         "openapi": "3.0.3",
         "info": {
             "title": "AgentCenter Autonomy",
-            "version": "2.0.0",
+            "version": "2.1.0",
             "description": (
-                "实验协议。设备连接器的生产路径仍是 /api/fleet 的领取与回写；"
-                "v2 outbox 只在目标是本中心时应用并确认，跨中心投递尚未闭环。"
+                "自治协议 v2。fleet v1 仍兼容；outbox 对本中心落地确认，"
+                "对已配置 fleet_link peer 尝试真实投递；未知远端记 waiting。"
+                "能力协商：superagent_control=1。"
             ),
         },
-        "paths": {path: {"post": {"summary": path}} for path in paths},
+        "paths": {
+            **{path: {"post": {"summary": path}} for path in all_paths},
+            "/api/v2/openapi.json": {"get": {"summary": "openapi"}},
+            "/api/v2/attention": {"get": {"summary": "list attention"}},
+            "/api/v2/metrics": {"get": {"summary": "metrics"}},
+        },
         "x-protocol-version": PROTOCOL_VERSION,
+        "x-features": {"superagent_control": 1},
     }
 
 
@@ -417,3 +434,191 @@ async def confirm_once(confirmation_id: str, req: ConfirmRequest, request: Reque
     )
     await attach_task(confirmation_id, created.id)
     return {"task_id": created.id, "created": True}
+
+
+class WorkItemCreate(BaseModel):
+    title: str = ""
+    goal: str
+    workspace_id: str = "cyber"
+    conversation_id: str = ""
+    task_id: str = ""
+    protocol_version: int = 2
+
+
+class LeaseRequest(BaseModel):
+    assignment_generation: int | None = None
+    protocol_version: int = 2
+
+
+class DeliveryAckRequest(BaseModel):
+    ack: str
+    assignment_generation: int | None = None
+    protocol_version: int = 2
+
+
+class HardwareEnqueue(BaseModel):
+    device_id: str
+    command: str
+    payload: dict = Field(default_factory=dict)
+    idempotency_key: str = ""
+    ttl_seconds: int = 120
+    protocol_version: int = 2
+
+
+class InterruptRequest(BaseModel):
+    device_id: str = ""
+    channel: str = "voice"
+    stop_audio_only: bool = True
+    cancel_task: bool = False
+    task_id: str = ""
+    protocol_version: int = 2
+
+
+@router.post("/work-items")
+async def create_work(req: WorkItemCreate) -> dict:
+    _check_protocol(req.protocol_version)
+    from app.core import work_items as wi
+
+    if req.conversation_id:
+        await wi.ensure_conversation(req.conversation_id, workspace_id=req.workspace_id)
+    wid = await wi.create_work_item(
+        title=req.title,
+        goal=req.goal,
+        workspace_id=req.workspace_id,
+        conversation_id=req.conversation_id,
+        task_id=req.task_id,
+    )
+    return {"id": wid, **((await wi.get_work_item(wid)) or {})}
+
+
+@router.post("/work-items/{work_item_id}/accept")
+async def accept_work(work_item_id: str, artifact_id: str = "") -> dict:
+    from app.core import work_items as wi
+
+    ok = await wi.accept_work_item(work_item_id, artifact_id=artifact_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="work item not found")
+    return await wi.get_work_item(work_item_id) or {}
+
+
+@router.get("/attention")
+async def attention_list() -> dict:
+    from app.core.supervisor import list_open
+
+    return {"items": await list_open()}
+
+
+@router.post("/executions/{execution_id}/lease")
+async def execution_lease(execution_id: str, req: LeaseRequest) -> dict:
+    _check_protocol(req.protocol_version)
+    from app.core.execution import ClaimError, renew_lease
+
+    try:
+        return await renew_lease(execution_id, generation=req.assignment_generation)
+    except ClaimError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/executions/{execution_id}/delivery-ack")
+async def execution_delivery_ack(execution_id: str, req: DeliveryAckRequest) -> dict:
+    _check_protocol(req.protocol_version)
+    from app.core.execution import ClaimError, set_delivery_ack
+
+    try:
+        await set_delivery_ack(
+            execution_id, req.ack, generation=req.assignment_generation
+        )
+    except ClaimError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+    return {"execution_id": execution_id, "delivery_ack": req.ack}
+
+
+@router.post("/hardware/commands")
+async def hardware_enqueue(req: HardwareEnqueue) -> dict:
+    _check_protocol(req.protocol_version)
+    from app.core.hardware_commands import HardwareCommandError, enqueue
+
+    try:
+        return await enqueue(
+            req.device_id,
+            req.command,
+            payload=req.payload,
+            idempotency_key=req.idempotency_key,
+            ttl_seconds=req.ttl_seconds,
+        )
+    except HardwareCommandError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
+
+
+@router.post("/channels/interrupt")
+async def channel_interrupt(req: InterruptRequest, request: Request) -> dict:
+    """打断播报默认只停音频；取消任务需 cancel_task=true 且带权限。"""
+    _check_protocol(req.protocol_version)
+    logger.info(
+        "channel interrupt device=%s stop_audio=%s cancel_task=%s task_id=%s",
+        req.device_id,
+        req.stop_audio_only,
+        req.cancel_task,
+        req.task_id,
+    )
+    result = {
+        "audio_stopped": bool(req.stop_audio_only or not req.cancel_task),
+        "task_cancelled": False,
+        "task_id": req.task_id or "",
+    }
+    if req.cancel_task and req.task_id:
+        tm = request.app.state.task_manager
+        try:
+            task = await tm.cancel_task(req.task_id)
+            result["task_cancelled"] = task is not None
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+    elif req.cancel_task and not req.task_id:
+        raise HTTPException(status_code=400, detail="cancel_task requires task_id")
+    return result
+
+
+@router.post("/conversations/{conversation_id}/messages")
+async def conversation_message(
+    conversation_id: str,
+    request: Request,
+    text: str = "",
+    idempotency_key: str = Header(default="", alias="Idempotency-Key"),
+) -> dict:
+    """持久消息落盘；202 语义用同步回执简化。"""
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    content = str(body.get("text") or text or "")
+    from app.core import work_items as wi
+
+    cid = await wi.ensure_conversation(conversation_id, workspace_id=body.get("workspace_id") or "cyber")
+    external = idempotency_key or str(body.get("idempotency_key") or "")
+    if external:
+        trig = await wi.record_trigger(
+            source="conversation",
+            external_event_id=external,
+            workspace_id=body.get("workspace_id") or "cyber",
+            conversation_id=cid,
+            payload={"text": content},
+        )
+        if trig is None and external:
+            # 去重：仍追加查询已有消息
+            pass
+    mid = await wi.append_message(
+        cid,
+        role="user",
+        content=content,
+        actor_id=str(body.get("actor_id") or ""),
+        channel=str(body.get("channel") or ""),
+        work_item_id=str(body.get("work_item_id") or ""),
+        idempotency_key=external,
+    )
+    return {
+        "status": "accepted",
+        "conversation_id": cid,
+        "message_id": mid,
+        "routing_status": "queued",
+    }

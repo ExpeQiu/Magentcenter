@@ -131,8 +131,13 @@ async def resolve_token(node_token: str, device_token: str) -> Principal:
             return Principal(kind="device", node_id=row.node_id, role="conversation")
         logger.info("access rejected reason=invalid_node_token")
         raise AuthError(401, "node credential revoked or unknown")
+    from app.core import channels as channel_service
     from app.core import fleet as fleet_service
 
+    ch = await channel_service.authenticate_channel(device_token)
+    if ch is not None:
+        logger.debug("access device channel device_id=%s kind=%s", ch.device_id, ch.kind)
+        return Principal(kind="device", node_id=ch.device_id, role="conversation")
     rec = await fleet_service.authenticate(device_token)
     if rec is not None and (rec.mode or "") == "voice":
         logger.debug("access device node_id=%s", rec.id)

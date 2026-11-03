@@ -282,6 +282,9 @@ async def _upsert_entry(
     payload: dict[str, Any] | None = None,
     layer: str = "",
     facet: str = "",
+    availability: str = "",
+    node_id: str = "",
+    access_scope: str = "",
 ) -> str:
     content = redact_secrets((content or "").strip())[:MAX_CONTENT]
     title = re.sub(r"\s+", " ", redact_secrets(title or "").strip())[:120] or source_id[:120]
@@ -324,6 +327,12 @@ async def _upsert_entry(
             existing.tags_json = json.dumps(tags, ensure_ascii=False)
             existing.payload_json = json.dumps(payload, ensure_ascii=False)
             existing.embedding_json = emb
+            if availability:
+                existing.availability = availability
+            if node_id:
+                existing.node_id = node_id
+            if access_scope:
+                existing.access_scope = access_scope
             existing.updated_at = datetime.utcnow()
             kid = existing.id
         else:
@@ -346,6 +355,9 @@ async def _upsert_entry(
                     status=status or "",
                     tags_json=json.dumps(tags, ensure_ascii=False),
                     payload_json=json.dumps(payload, ensure_ascii=False),
+                    availability=availability or "",
+                    node_id=node_id or "",
+                    access_scope=access_scope or "",
                     embedding_json=emb,
                 )
             )
@@ -787,14 +799,28 @@ async def upsert_artifact_ref(
     structure_notes: str = "",
     task_id: str = "",
     session_id: str = "",
+    availability: str = "local",
+    node_id: str = "",
+    access_scope: str = "owner",
 ) -> str:
+    """availability: local|online|offline|unknown。跨端禁止下发裸路径当可下载 URL。"""
     tags = tags or []
+    from app.core.identity import load_or_create_identity
+
+    ident = load_or_create_identity()
+    node_id = node_id or ident.node_id
+    # 云端投影：不把本机绝对路径当作可下载地址
+    public_path = path if availability in ("online",) else ""
     payload = {
-        "path": path,
+        "path": path if availability == "local" else public_path or "",
+        "local_path_private": availability != "online",
         "summary": summary,
         "structure_notes": structure_notes,
         "task_id": task_id,
         "session_id": session_id,
+        "availability": availability or "local",
+        "node_id": node_id,
+        "access_scope": access_scope or "owner",
     }
     content = _content_from_card(
         kind="artifact_ref",
@@ -815,6 +841,9 @@ async def upsert_artifact_ref(
         workspace_id=workspace_id,
         tags=tags,
         payload=payload,
+        availability=availability or "local",
+        node_id=node_id,
+        access_scope=access_scope or "owner",
     )
 
 

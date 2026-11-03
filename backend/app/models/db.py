@@ -232,6 +232,9 @@ class KnowledgeRecord(Base):
     tags_json: Mapped[str] = mapped_column(Text, default="[]")
     payload_json: Mapped[str] = mapped_column(Text, default="{}")
     embedding_json: Mapped[str] = mapped_column(Text, default="")
+    availability: Mapped[str] = mapped_column(String(16), default="")
+    node_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    access_scope: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -287,6 +290,11 @@ class ExecutionRecord(Base):
     external_write: Mapped[int] = mapped_column(Integer, default=0)
     cancel_ack_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     stopped_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # 租约与投递：generation fencing；ACK 三分 received/applied/result_persisted
+    assignment_generation: Mapped[int] = mapped_column(Integer, default=1)
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    delivery_ack: Mapped[str] = mapped_column(String(32), default="")
+    work_item_id: Mapped[str] = mapped_column(String(36), index=True, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, server_default=func.now(), onupdate=func.now()
@@ -445,6 +453,179 @@ class DevicePairRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class DeviceRecord(Base):
+    """物理设备。可同时挂接执行 Node 与语音 Channel。"""
+
+    __tablename__ = "devices"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), default="")
+    platform: Mapped[str] = mapped_column(String(64), default="")
+    owner_center_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ChannelRecord(Base):
+    """交互通道（voice/desktop）。令牌只存哈希；不领执行任务。"""
+
+    __tablename__ = "channels"
+    __table_args__ = (UniqueConstraint("device_id", "kind", name="uq_channel_device_kind"),)
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    kind: Mapped[str] = mapped_column(String(16), index=True, default="voice")
+    name: Mapped[str] = mapped_column(String(128), default="")
+    platform: Mapped[str] = mapped_column(String(64), default="esp32")
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, default="")
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ConversationRecord(Base):
+    """跨端可续接的业务会话。"""
+
+    __tablename__ = "conversations"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    owner_center_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    title: Mapped[str] = mapped_column(String(256), default="")
+    active_work_item_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class ConversationMessageRecord(Base):
+    __tablename__ = "conversation_messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id",
+            "idempotency_key",
+            name="uq_conversation_idem",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    role: Mapped[str] = mapped_column(String(16), default="user")
+    content: Mapped[str] = mapped_column(Text, default="")
+    actor_id: Mapped[str] = mapped_column(String(64), default="")
+    channel: Mapped[str] = mapped_column(String(16), default="")
+    work_item_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    idempotency_key: Mapped[str] = mapped_column(String(128), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class TriggerRecord(Base):
+    """环境事件落盘；同键去重。"""
+
+    __tablename__ = "source_triggers"
+    __table_args__ = (
+        UniqueConstraint(
+            "owner_id",
+            "workspace_id",
+            "source",
+            "external_event_id",
+            name="uq_trigger_external",
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    source: Mapped[str] = mapped_column(String(64), default="")
+    external_event_id: Mapped[str] = mapped_column(String(128), default="")
+    kind: Mapped[str] = mapped_column(String(32), default="message")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class WorkItemRecord(Base):
+    """长期工作主线；TaskRecord 仍是执行请求。"""
+
+    __tablename__ = "work_items"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    owner_center_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    title: Mapped[str] = mapped_column(String(256), default="")
+    goal: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(32), index=True, default="ready")
+    wait_reason: Mapped[str] = mapped_column(String(64), default="")
+    requirement_revision: Mapped[int] = mapped_column(Integer, default=1)
+    state_version: Mapped[int] = mapped_column(Integer, default=1)
+    task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    accepted_artifact_id: Mapped[str] = mapped_column(String(36), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, server_default=func.now(), onupdate=func.now()
+    )
+
+
+class AttentionRecord(Base):
+    """需要用户回答、审阅或核实的持久待办。"""
+
+    __tablename__ = "attention_items"
+    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_attention_dedupe"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    dedupe_key: Mapped[str] = mapped_column(String(160), default="")
+    kind: Mapped[str] = mapped_column(String(32), index=True, default="")
+    work_item_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    task_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    execution_id: Mapped[str] = mapped_column(String(36), default="")
+    summary: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String(16), index=True, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class MandateRecord(Base):
+    """工作级授权快照。"""
+
+    __tablename__ = "mandates"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    work_item_id: Mapped[str] = mapped_column(String(36), index=True, default="")
+    issued_by: Mapped[str] = mapped_column(String(64), default="")
+    scope_json: Mapped[str] = mapped_column(Text, default="{}")
+    permitted_actions: Mapped[str] = mapped_column(Text, default="[]")
+    budget_json: Mapped[str] = mapped_column(Text, default="{}")
+    policy_version: Mapped[int] = mapped_column(Integer, default=1)
+    status: Mapped[str] = mapped_column(String(16), default="active")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class HardwareCommandRecord(Base):
+    """带有效期的硬件指令；过期/重复拒绝。"""
+
+    __tablename__ = "hardware_commands"
+    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_hw_cmd_idem"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    command: Mapped[str] = mapped_column(String(64), default="")
+    payload_json: Mapped[str] = mapped_column(Text, default="{}")
+    idempotency_key: Mapped[str] = mapped_column(String(128), default="")
+    status: Mapped[str] = mapped_column(String(16), default="queued")
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 _engine = None
 _session_factory = None
 
@@ -482,6 +663,13 @@ _MIGRATIONS: list[tuple[str, str, str]] = [
     ("tasks", "lifecycle_status", "VARCHAR(32) DEFAULT ''"),
     ("tasks", "cancel_requested_at", "DATETIME"),
     ("tasks", "revision", "INTEGER DEFAULT 0"),
+    ("executions", "assignment_generation", "INTEGER DEFAULT 1"),
+    ("executions", "lease_expires_at", "DATETIME"),
+    ("executions", "delivery_ack", "VARCHAR(32) DEFAULT ''"),
+    ("executions", "work_item_id", "VARCHAR(36) DEFAULT ''"),
+    ("knowledge_entries", "availability", "VARCHAR(16) DEFAULT ''"),
+    ("knowledge_entries", "node_id", "VARCHAR(64) DEFAULT ''"),
+    ("knowledge_entries", "access_scope", "VARCHAR(64) DEFAULT ''"),
 ]
 
 

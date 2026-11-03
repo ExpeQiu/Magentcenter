@@ -1,6 +1,6 @@
 # ADR-002：桌面端改为 Tauri 2 + 静态前端 + FastAPI sidecar
 
-- 状态：已采纳
+- 状态：已采纳（2026-11-03 修订关窗语义）
 - 日期：2026-08-25
 
 ## 决策
@@ -9,7 +9,7 @@
 
 1. 前端 `next build` 使用 `output: 'export'`，产物为静态 HTML/CSS/JS，运行时不再内嵌 Node。
 2. FastAPI 作为 sidecar（便携 CPython + uvicorn），同时提供 `/api` 与静态页；窗口加载 `http://127.0.0.1:8013/`。
-3. 关闭窗口 / 退出应用时结束 sidecar 进程组，避免 API 残留。
+3. **关闭窗口不停止**节点服务；显式停止走 Tauri 命令 `stop_node_service` 或 `scripts/stop.sh`。sidecar PID 写入数据目录，便于 App 重启后仍可停止。
 4. 包内只带 `.env.example`。真实密钥写在安装后的 `~/Library/Application Support/AgentCenter/.env`。
 
 ## 为何不用 Electron

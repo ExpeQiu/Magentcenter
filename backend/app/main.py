@@ -126,19 +126,51 @@ async def lifespan(app: FastAPI):
     outbox_task = asyncio.create_task(_pump_outbox())
     app.state.outbox_task = outbox_task
 
+    async def _run_supervisor() -> None:
+        from app.core.supervisor import run_once
+
+        while True:
+            try:
+                await run_once()
+            except Exception:
+                logger.exception("supervisor tick failed")
+            await asyncio.sleep(30)
+
+    supervisor_task = asyncio.create_task(_run_supervisor())
+    app.state.supervisor_task = supervisor_task
+
+    if settings.connector_enabled():
+        logger.info(
+            "cloud connector enabled profile=%s cloud_connector=%s",
+            settings.normalized_profile(),
+            settings.cloud_connector,
+        )
+    else:
+        logger.info(
+            "cloud connector disabled profile=%s cloud_connector=%s",
+            settings.normalized_profile(),
+            settings.cloud_connector,
+        )
+
     health = await registry.check_all_health()
     logger.info(
-        "AgentCenter started mock=%s runtimes=%s health=%s",
+        "AgentCenter started mock=%s runtimes=%s slots=%s health=%s",
         settings.ai_mock_mode,
         settings.enabled_runtimes(),
+        settings.execution_slots(),
         [(h.runtime, h.available, h.version) for h in health],
     )
     yield
     outbox_task.cancel()
+    supervisor_task.cancel()
     try:
         await outbox_task
     except asyncio.CancelledError:
         logger.info("outbox dispatch stopped")
+    try:
+        await supervisor_task
+    except asyncio.CancelledError:
+        logger.info("supervisor stopped")
     alert_watcher.stop()
     autopilot_manager.stop()
     logger.info("AgentCenter shutting down")

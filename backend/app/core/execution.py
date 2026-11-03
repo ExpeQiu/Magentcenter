@@ -486,3 +486,90 @@ def reconcile_handle(saved_status: str, handle_alive: bool) -> str:
     if handle_alive:
         return "running"
     return "unknown"
+
+
+LEASE_TTL = timedelta(minutes=5)
+_DELIVERY_ACKS = {"received", "applied", "result_persisted"}
+
+
+async def renew_lease(execution_id: str, *, generation: int | None = None) -> dict:
+    """续约租约。generation 不匹配则拒绝（fencing）。"""
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(ExecutionRecord, execution_id)
+        if row is None:
+            raise ClaimError("execution not found", 404)
+        current = int(row.assignment_generation or 1)
+        if generation is not None and int(generation) != current:
+            logger.info(
+                "lease rejected stale generation execution_id=%s got=%s want=%s",
+                execution_id,
+                generation,
+                current,
+            )
+            raise ClaimError("stale assignment generation", 409)
+        row.lease_expires_at = _now() + LEASE_TTL
+        row.updated_at = _now()
+        await session.commit()
+        return {
+            "execution_id": execution_id,
+            "assignment_generation": current,
+            "lease_expires_at": row.lease_expires_at.isoformat() + "Z",
+        }
+
+
+async def bump_generation(execution_id: str) -> int:
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(ExecutionRecord, execution_id)
+        if row is None:
+            raise ClaimError("execution not found", 404)
+        row.assignment_generation = int(row.assignment_generation or 1) + 1
+        row.lease_expires_at = _now() + LEASE_TTL
+        row.updated_at = _now()
+        gen = row.assignment_generation
+        await session.commit()
+    logger.info("execution generation bumped id=%s gen=%s", execution_id, gen)
+    return gen
+
+
+async def set_delivery_ack(
+    execution_id: str,
+    ack: str,
+    *,
+    generation: int | None = None,
+) -> None:
+    """ACK 三分：received → applied → result_persisted。迟到旧代次拒绝。"""
+    if ack not in _DELIVERY_ACKS:
+        raise ClaimError("invalid delivery_ack", 400)
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(ExecutionRecord, execution_id)
+        if row is None:
+            raise ClaimError("execution not found", 404)
+        current = int(row.assignment_generation or 1)
+        if generation is not None and int(generation) != current:
+            raise ClaimError("stale assignment generation", 409)
+        if row.lease_expires_at and row.lease_expires_at < _now() and ack != "result_persisted":
+            # 租约过期仍允许结果落盘对账，但拒绝新 applied
+            if ack == "applied":
+                raise ClaimError("lease expired", 409)
+        row.delivery_ack = ack
+        row.updated_at = _now()
+        await session.commit()
+    logger.info("delivery_ack execution_id=%s ack=%s", execution_id, ack)
+
+
+async def reject_stale_write(
+    execution_id: str,
+    *,
+    generation: int,
+) -> None:
+    """迟到回写入口：代次不符即拒绝。"""
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(ExecutionRecord, execution_id)
+        if row is None:
+            raise ClaimError("execution not found", 404)
+        if int(generation) != int(row.assignment_generation or 1):
+            raise ClaimError("stale assignment generation", 409)

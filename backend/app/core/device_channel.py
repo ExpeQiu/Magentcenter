@@ -13,7 +13,7 @@ from sqlalchemy import delete, select, update
 from app.core import fleet as fleet_service
 from app.core.fleet import FleetError
 from app.core.super_ai import brief_for_device, handle_turn, task_spoken
-from app.models.db import DevicePairRecord, FleetNodeRecord, get_session_factory
+from app.models.db import DevicePairRecord, get_session_factory
 from app.models.schemas import SuperAiPending, SuperAiTurnResponse
 
 logger = logging.getLogger(__name__)
@@ -76,11 +76,11 @@ async def start_device_pair(
     if not fleet_service.NODE_ID_RE.match(device_id):
         raise DevicePairError("设备标识无效")
     platform = platform if platform in ("esp32", "desktop") else "esp32"
+    from app.core import channels as channel_service
+
+    await channel_service.assert_can_pair(device_id)
     factory = get_session_factory()
     async with factory() as session:
-        node = await session.get(FleetNodeRecord, device_id)
-        if node is not None and (node.mode or "plugin") != "voice":
-            raise FleetError("device id already registered")
         await session.execute(delete(DevicePairRecord).where(DevicePairRecord.device_id == device_id))
         code = ""
         code_hash = ""
@@ -225,12 +225,27 @@ async def poll_device_pair(device_id: str, poll_secret: str) -> dict[str, str | 
         }
 
 
-async def _require_voice(token: str):
+class _VoiceSubject:
+    """统一旧 FleetNode voice 行与 ChannelRecord 的设备主体。"""
+
+    def __init__(self, device_id: str, name: str = ""):
+        self.id = device_id
+        self.name = name or device_id
+        self.mode = "voice"
+
+
+async def _require_voice(token: str) -> _VoiceSubject:
+    from app.core import channels as channel_service
+
+    ch = await channel_service.authenticate_channel(token)
+    if ch is not None:
+        return _VoiceSubject(ch.device_id, ch.name)
+    # 兼容历史：仍在 fleet_nodes.mode=voice 的令牌
     rec = await fleet_service.authenticate(token)
     if rec is None or (rec.mode or "") != "voice":
         raise DeviceAuthError("invalid device token")
     await fleet_service.heartbeat(token)
-    return rec
+    return _VoiceSubject(rec.id, rec.name or rec.id)
 
 
 async def device_turn(

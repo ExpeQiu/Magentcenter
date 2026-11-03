@@ -123,7 +123,7 @@ def test_voice_device_talks_and_collects_task(db):
 
 
 def test_desktop_channel_keeps_longer_reply(db, monkeypatch):
-    from app.models.db import FleetNodeRecord, get_session_factory
+    from app.models.db import ChannelRecord, FleetNodeRecord, get_session_factory
     from app.models.schemas import SuperAiTurnResponse
 
     async def scenario():
@@ -141,6 +141,9 @@ def test_desktop_channel_keeps_longer_reply(db, monkeypatch):
             assert rec is not None
             assert rec.platform == "desktop"
             assert rec.mode == "voice"
+            ch = await session.get(ChannelRecord, "ox-steward:desktop")
+            assert ch is not None
+            assert ch.token_hash
 
         long = "甲" * 600
 

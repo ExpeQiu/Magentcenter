@@ -516,36 +516,13 @@ async def _store_voice_device(
     hostname: str = "",
     platform: str = "esp32",
 ) -> str:
-    """签发语音终端令牌。只把哈希写入名册，明文交给调用方。"""
-    token = secrets.token_urlsafe(32)
-    factory = get_session_factory()
-    async with factory() as session:
-        rec = await session.get(FleetNodeRecord, device_id)
-        if rec is not None and (rec.mode or "plugin") != "voice":
-            raise FleetError("device id already registered")
-        if rec is None:
-            rec = FleetNodeRecord(
-                id=device_id,
-                name=name or device_id,
-                bound=0,
-                agents_json="[]",
-                seen_json="[]",
-            )
-            session.add(rec)
-        rec.name = name or rec.name or device_id
-        rec.token_hash = hash_token(token)
-        rec.runtimes_json = "[]"
-        rec.agents_json = "[]"
-        rec.seen_json = "[]"
-        rec.mode = "voice"
-        rec.webhook_url = ""
-        rec.bound = 0
-        rec.platform = platform if platform in ("esp32", "desktop") else "esp32"
-        rec.hostname = hostname or rec.hostname or ""
-        rec.last_seen = _now()
-        rec.updated_at = _now()
-        await session.commit()
-    return token
+    """签发语音通道令牌（Channel 表）。可与同 device 上的执行 Node 并存。"""
+    from app.core import channels as channel_service
+
+    _ = hostname  # 设备主机名由 DeviceRecord / Node 持有
+    return await channel_service.issue_voice_channel(
+        device_id, name=name, platform=platform
+    )
 
 
 async def enroll_voice(

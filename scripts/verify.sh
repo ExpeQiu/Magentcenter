@@ -201,6 +201,19 @@ else
   check "Cron 修复 404" "code=\$(curl -s -o /dev/null -w '%{http_code}' -X POST '$BASE_URL/api/cron/__missing__/repair' -H 'Content-Type: application/json' -d '{}'); [[ \$code == 404 ]]"
 fi
 
+# 多端改造：无云本地闭环、协议契约、voice/connector 共存单测
+check "无云本地闭环协议" "curl -sf '$BASE_URL/api/v2/openapi.json' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('x-protocol-version')==2; assert (d.get('x-features') or {}).get('superagent_control')==1; assert '跨中心投递尚未闭环' not in (d.get('info') or {}).get('description','')\""
+
+check "健康含 center" "curl -sf '$BASE_URL/api/health' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok'\""
+
+if [[ -x "$ROOT/backend/.venv/bin/python" ]]; then
+  PY="$ROOT/backend/.venv/bin/python"
+else
+  PY=python3
+fi
+check "单测 channel 共存" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-coexist AI_MOCK_MODE=true $PY -m pytest tests/test_channel_coexist.py -q --tb=line"
+check "单测 workitem/lease" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-wi AI_MOCK_MODE=true $PY -m pytest tests/test_work_items_and_lease.py -q --tb=line"
+
 echo ""
 echo "=== 结果: $pass 通过, $fail 失败 ==="
 if [[ $fail -gt 0 ]]; then

@@ -178,29 +178,59 @@ fn spawn_backend(runtime: &Path) -> Result<Child, String> {
     cmd.spawn().map_err(|e| e.to_string())
 }
 
-fn stop_backend() {
-    if !STARTED_BY_APP.load(Ordering::SeqCst) {
-        return;
+fn sidecar_pid_path() -> PathBuf {
+    support_dir().join("data/sidecar.pid")
+}
+
+fn write_sidecar_pid(pid: u32) {
+    let _ = fs::create_dir_all(support_dir().join("data"));
+    if let Err(e) = fs::write(sidecar_pid_path(), format!("{pid}\n")) {
+        desktop_log(&format!("write sidecar.pid failed err={e}"));
     }
+}
+
+fn clear_sidecar_pid() {
+    let _ = fs::remove_file(sidecar_pid_path());
+}
+
+fn stop_pid(pid: i32) {
+    #[cfg(unix)]
+    {
+        unsafe {
+            libc::killpg(pid, libc::SIGTERM);
+        }
+        thread::sleep(Duration::from_millis(400));
+        unsafe {
+            libc::killpg(pid, libc::SIGKILL);
+        }
+        // 若不是进程组头，再杀单进程
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+fn stop_backend() {
     let mut guard = match BACKEND.lock() {
         Ok(g) => g,
         Err(_) => return,
     };
     if let Some(mut child) = guard.take() {
         desktop_log(&format!("stop sidecar pid={}", child.id()));
-        #[cfg(unix)]
-        {
-            let pid = child.id() as i32;
-            unsafe {
-                libc::killpg(pid, libc::SIGTERM);
-            }
-            thread::sleep(Duration::from_millis(400));
-            unsafe {
-                libc::killpg(pid, libc::SIGKILL);
-            }
-        }
+        stop_pid(child.id() as i32);
         let _ = child.kill();
         let _ = child.wait();
+        clear_sidecar_pid();
+        STARTED_BY_APP.store(false, Ordering::SeqCst);
+        return;
+    }
+    // App 重启后内存无 Child：读持久化 pid
+    if let Ok(raw) = fs::read_to_string(sidecar_pid_path()) {
+        if let Ok(pid) = raw.trim().parse::<i32>() {
+            desktop_log(&format!("stop sidecar from pidfile pid={pid}"));
+            stop_pid(pid);
+            clear_sidecar_pid();
+        }
     }
     STARTED_BY_APP.store(false, Ordering::SeqCst);
 }
@@ -284,6 +314,7 @@ fn boot(app: AppHandle) {
     set_status(&app, "正在启动 FastAPI sidecar…");
     match spawn_backend(&runtime) {
         Ok(child) => {
+            write_sidecar_pid(child.id());
             STARTED_BY_APP.store(true, Ordering::SeqCst);
             if let Ok(mut g) = BACKEND.lock() {
                 *g = Some(child);

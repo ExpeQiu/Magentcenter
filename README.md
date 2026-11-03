@@ -2,7 +2,7 @@
 
 OpenClaw 与 Hermes 的编排中台。云端协调器只放超级AI、云端任务、设备名册、跨端路由和审计；智能体执行、知识库、技能和输出物在本机完整版。
 
-首页是「超级AI」：一句话只落到白名单服务（任务、知识库、技能、输出物、系统、多端）。建任务先复述，回复「确认」后才执行。控制台仍在工作区路径下，默认工作区是 `cyber`。
+首页是「超级AI」：一句话只落到白名单服务（任务、知识库、技能、输出物、系统、多端）。固定说法与名册命中可直接建任务或跨端派发；另保留确认单兼容路径。控制台仍在工作区路径下，默认工作区是 `cyber`。多端目标设计见 [guide/guide from codex/multi-end-design.md](guide/guide%20from%20codex/multi-end-design.md)，实施索引见 [guide/multi-end-roadmap.md](guide/multi-end-roadmap.md)。
 
 ## 从哪进
 
@@ -27,30 +27,30 @@ cp .env.example .env
 ./scripts/status.sh
 ```
 
-## 两套设备，不要混用
+## 执行节点与语音通道（可同机共存）
 
-| | 连接器 `fleet-edge` | 语音终端（ESP32） |
-|--|---------------------|-------------------|
-| 装在哪 | 跑 OpenClaw 或 Hermes 的机器 | 只说话、不跑智能体的板子 |
-| 注册 | `POST /api/fleet/enroll`，须扫到智能体 | `POST /api/super-ai/device/enroll` |
-| 名册模式 | `plugin` 或 `webhook` | `voice`，不领任务 |
-| 之后做什么 | 心跳、领取任务、在本机执行，也可调用其他端的智能体 | `POST /api/super-ai/device/turn`；确认后的任务由云端调度，设备轮询结果 |
-| 令牌 | `X-Node-Token`，文件在 `~/.agentcenter/<节点>.token` | `X-Device-Token`，固件存在板子上 |
+| | 连接器 `fleet-edge` / Node Agent | 语音 Channel（ESP32 / 桌面小牛） |
+|--|----------------------------------|----------------------------------|
+| 装在哪 | 跑 OpenClaw 或 Hermes 的机器 | 对话入口；可不跑智能体 |
+| 注册 | `POST /api/fleet/enroll`，须扫到智能体 | `POST /api/super-ai/device/enroll` 或短码绑定 |
+| 身份 | Node（`X-Node-Token`） | Channel（`X-Device-Token`） |
+| 之后做什么 | 心跳、领取任务、本机执行，可 `call` 其他端 | `POST /api/super-ai/device/turn`；任务由协调器调度，设备轮询播报 |
+| 令牌落盘 | `~/.agentcenter/<节点>.token` | 固件或桌面本地 |
 
-两边共用 `FLEET_ENROLL_TOKEN`。令牌只存哈希。语音终端的设备标识若已被连接器占用，登记会被拒绝。桌面小牛走同一条在场通道：登记时 `platform=desktop`，对话带 `channel=desktop`，不领任务。
+两边共用 `FLEET_ENROLL_TOKEN`。令牌只存哈希。**同一 `device_id` 可同时绑定执行 Node 与语音 Channel**（Channel 表独立，不再与连接器互斥）。桌面小牛：`platform=desktop`，对话带 `channel=desktop`，不领任务。
 
 连接器说明见 [fleet-edge/README.md](fleet-edge/README.md)。固件在 `firmware/esp32/super_ai/`，串口一行文字即发送；麦克风接在发送之前即可。
 
 ## 超级AI 会接住的话
 
-认不出就追问，不会猜着去调接口。写操作只有「建任务」，且必须先确认。
+认不出且未配置模型时追问；规则命中与名册派发可直接执行。确认单路径仍兼容。
 
 | 说法 | 调用 |
 |------|------|
 | 进行中的任务、任务列表 | 当前工作区任务 |
-| 新建任务：… / 帮我做… | 复述默认智能体和内容，等「确认」 |
-| 确认 / 执行 / 做吧 | 真正创建任务 |
-| 取消 / 算了 | 丢掉确认单 |
+| 新建任务：… / 帮我做… | 规则建任务（可直建；兼容确认单） |
+| 确认 / 执行 / 做吧 | 执行仍挂起的确认单 |
+| 取消 / 算了 | 丢掉未执行的确认单 |
 | 什么是… / 查一下… | 知识库，最多 3 条 |
 | 有哪些技能 | 未下线技能，最多 6 条 |
 | 最近产出 | 输出物最近文件 |

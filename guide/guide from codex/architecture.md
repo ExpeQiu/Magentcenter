@@ -1,10 +1,12 @@
 # AgentCenter 架构设计
 
+> 2026-11-03 设计对齐：以[多端分离与云端统一调度方案](multi-end-design.md)为当前跨端职责依据。下文模块与接口描述当前源码；目标中的完整 PC 自治、跨端同步和独立云端 worker 需分别验收。实施索引见 [multi-end-roadmap.md](../multi-end-roadmap.md)；Super-agent 对照见 [super-agent-alignment.md](../super-agent-alignment.md)。语音通道与执行 Node 已解耦（`channels` 表），可同机共存。
+
 ## 定位
 
-云端是协调器，本机智能体仍由 OpenClaw 或 Hermes 执行。
+云端负责跨端协调；PC full 保留本地服务、任务与运行时。目标要求 PC 无需云端账号或服务即可独立建任务、调度执行并管理结果；联网仅增加授权协同。PC App、本地核心和 Node Agent 的目标职责见设计正文。
 
-- **超级AI**：首页把一句话收成白名单意图，再调用已有服务。认不出就追问。
+- **超级AI**：固定意图走白名单服务；对不上且模型可用时处理闲聊或按名册建议派发。
 - **任务**：`queued` → `running` → `completed` / `failed` / `cancelled`，带 `runtime`。进度走 SSE 与 WebSocket。
 - **队友**：聚合 `openclaw agents list` 与 `hermes profile list`，按 `(runtime, agent_id)` 查找。
 - **多端**：连接器上报并领取任务；语音终端只对话，不领任务。
@@ -13,7 +15,7 @@
 
 ## 架构图
 
-可视化见 [2026-10-07-skota-M-AgentCenter系统架构.html](./2026-10-07-skota-M-AgentCenter系统架构.html)。
+当前目标结构见[多端设计](multi-end-design.md#三结构与主链路)。[2026-10-07 系统架构图](./2026-10-07-skota-M-AgentCenter系统架构.html)为历史模块图，不作为当前部署与自治边界。
 
 ```
 超级AI 网页 ── POST /api/super-ai/turn ──┐
@@ -130,7 +132,7 @@ fleet-edge（plugin / webhook）
 - `node_id=auto` 只选当前在线、且已绑定该智能体的设备。指定离线设备时任务排队，等连接器来领
 - 设备地址能被云端访问时，可用 webhook（签名头 `X-Fleet-Timestamp` + `X-Fleet-Signature`，算法与飞书机器人相同）
 - 令牌只存哈希。注册令牌 `FLEET_ENROLL_TOKEN`。连接器令牌落在 `~/.agentcenter/<node>.token`，请求头 `X-Node-Token`。语音终端用另一套头 `X-Device-Token`，见下文「超级AI」
-- 名册模式：`local`（协调器本机）、`plugin`（NAT 后领取）、`webhook`（云端推送）、`voice`（只对话）
+- 当前兼容名册模式：`local`（协调器本机）、`plugin`（NAT 后领取）、`webhook`（云端推送）、`voice`（只对话）。目标模型将设备形态、交互通道与执行身份分离；同一 PC 可同时提供语音入口与执行能力。
 
 ## 分期路线
 
@@ -150,8 +152,8 @@ fleet-edge（plugin / webhook）
 - **Phase 14**：Outputs→ArtifactRef 批量建指；Embedding 批量重嵌入；告警 profile 导入导出；卡片质量评分
 - **Phase 15**：多端只做扫描和绑定。给智能体的任务统一从「任务」发出
 - **Phase 16**：知识库改为 Personal Wiki 三层加权召回；技能捕获 / 提炼 / 验证已按 ADR-003 落地
-- **Phase 17**：首页为「超级AI」对话页。`POST /api/super-ai/turn` 统一处理文字与语音转写，只调用任务、知识库、技能、输出物、系统、多端；建任务须回复「确认」
-- **Phase 18（当前）**：超级AI在规则对不上时直连 OpenAI 兼容模型（第三方或本机）。闲聊直接回复；派发只点名已绑定名册，确认后本机建任务或跨端调用，结果回到同一条对话。地址、模型和 Key 写在 `data/super_ai.json`，已写出的字段不用环境变量盖回
+- **Phase 17**：首页为「超级AI」对话页。`POST /api/super-ai/turn` 统一处理文字与语音转写，只调用任务、知识库、技能、输出物、系统、多端；规则建任务与名册命中派发可直接创建，另保留确认单兼容路径
+- **Phase 18（当前）**：超级AI在规则对不上时直连 OpenAI 兼容模型（第三方或本机）。闲聊直接回复；派发只点名已绑定名册，命中后直接本机建任务或跨端调用，结果回到同一条对话。地址、模型和 Key 写在 `data/super_ai.json`，已写出的字段不用环境变量盖回
 
 ## 超级AI
 
@@ -190,6 +192,8 @@ fleet-edge（plugin / webhook）
 
 ## 云端部署
 
+本节为当前 `cloud` profile 的部署边界。目标允许挂接隔离的云端 worker 和授权内容副本，属于后续增量，不在协调器内启用本机 CLI 或挂载私人目录。
+
 `DEPLOY_PROFILE=cloud` 只跑协调器。执行槽位为 0，不扫描本机 OpenClaw / Hermes，能力声明只有 `conversation.text`。
 
 云上保留：超级AI 全局入口、云端任务、设备名册与登记、跨端路由、可靠消息、四类身份、审计、协调器健康。控制台对应超级AI、云端任务、多端、信息链、协调器状态。
@@ -200,7 +204,7 @@ fleet-edge（plugin / webhook）
 
 ## 多端自治
 
-部署 profile 为 `cloud`、`full`、`edge`。本机身份在数据目录的 `node_identity.json`，不使用主机名。任务归属在 `owner_center_id`。一次运行写在 `executions`，跨端子步骤写在 `delegations`，可靠消息走 `inbox` / `outbox`。
+部署 profile 为 `cloud`、`full`、`edge`。目标中 `full` 是包含本地核心的独立产品，`edge` 是轻量执行连接器，两者不可互相替代。无云时本地核心仍可新建和执行本地任务；仅远程步骤等待。接云不转移本地任务归属，重连按稳定任务与事件 ID 去重同步。本机身份在数据目录的 `node_identity.json`，不使用主机名。任务归属在 `owner_center_id`。一次运行写在 `executions`，跨端子步骤写在 `delegations`，可靠消息走 `inbox` / `outbox`。
 
 v1 任务状态仍是 `queued` / `running` / `completed` / `failed` / `cancelled`。需要核实的执行用 `lifecycle_status=needs_attention`，界面显示「待核实」。协议契约在 `GET /api/v2/openapi.json`。本地接口要带 `X-AgentCenter-Session`，令牌在数据目录，不放进 URL。关窗不停止节点服务；停止用 `scripts/stop.sh` 或桌面的 `stop_node_service`。
 

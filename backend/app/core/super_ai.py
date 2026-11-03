@@ -817,6 +817,24 @@ async def _commit_create(run_id, pending: SuperAiPending, slug, task_manager, *,
             node_id=pending.node_id or "",
         )
     )
+    try:
+        from app.core import work_items as wi_svc
+
+        work_id = await wi_svc.create_work_item(
+            title=(pending.prompt or "")[:80],
+            goal=pending.prompt or "",
+            workspace_id=wid or "cyber",
+            task_id=task.id,
+        )
+        await wi_svc.bind_task(work_id, task.id)
+        logger.info(
+            "super_ai work_item linked run_id=%s work_item=%s task_id=%s",
+            run_id,
+            work_id,
+            task.id,
+        )
+    except Exception:
+        logger.exception("super_ai work_item link failed task_id=%s", task.id)
     label = _STATUS.get(task.status, task.status)
     return _finish(
         run_id,

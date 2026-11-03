@@ -274,20 +274,77 @@ async def bump_outbox_attempt(message_id: str) -> None:
         logger.info("outbox retry message_id=%s attempts=%s", message_id, row.attempts)
 
 
+async def _peer_deliver(target_center_id: str, message: dict) -> bool:
+    """向已知 peer（fleet_link 云端）投递一条 outbox 消息。成功返回 True。"""
+    import json
+    import urllib.error
+    import urllib.request
+
+    from app.core.fleet import link_path, link_token_path, _read_link_file
+
+    path = link_path()
+    if not path.is_file():
+        return False
+    saved = _read_link_file()
+    cloud_url = str(saved.get("cloud_url") or "").rstrip("/")
+    if not cloud_url:
+        return False
+    peer_center = str(saved.get("remote_center_id") or saved.get("center_id") or "")
+    if peer_center and target_center_id != peer_center:
+        return False
+    token = ""
+    token_path = link_token_path()
+    if token_path.is_file():
+        token = token_path.read_text(encoding="utf-8").strip()
+    body = json.dumps({"messages": [message]}, ensure_ascii=False).encode()
+    req = urllib.request.Request(
+        cloud_url + "/api/v2/events/batch",
+        data=body,
+        method="POST",
+        headers={
+            "Content-Type": "application/json",
+            **({"X-Node-Token": token} if token else {}),
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            ok = 200 <= getattr(resp, "status", 200) < 300
+            logger.info(
+                "outbox peer deliver target=%s message_id=%s ok=%s",
+                target_center_id,
+                message.get("message_id"),
+                ok,
+            )
+            return ok
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, OSError) as exc:
+        logger.warning(
+            "outbox peer deliver failed target=%s err=%s",
+            target_center_id,
+            exc,
+        )
+        return False
+
+
 async def dispatch_pending(limit: int = 50) -> dict:
-    """本中心的发件在收件箱落地后确认。远端目标只记录重试，不假装已经送达。"""
+    """本中心落地确认；已知 peer 真实投递；未知远端记 waiting。"""
     ident = load_or_create_identity()
     acked = 0
     waiting = 0
+    delivered = 0
     for message in await pending_outbox(limit):
         message_id = str(message.get("message_id") or "")
         target = str(message.get("target_center_id") or "")
         if not message_id:
             continue
         if target and target != ident.center_id:
-            await bump_outbox_attempt(message_id)
-            waiting += 1
-            logger.info("outbox waiting remote message_id=%s target=%s", message_id, target)
+            if await _peer_deliver(target, message):
+                await ack_outbox(message_id)
+                delivered += 1
+                acked += 1
+            else:
+                await bump_outbox_attempt(message_id)
+                waiting += 1
+                logger.info("outbox waiting remote message_id=%s target=%s", message_id, target)
             continue
         source = str(message.get("source_node_id") or ident.node_id)
         try:
@@ -299,9 +356,14 @@ async def dispatch_pending(limit: int = 50) -> dict:
             continue
         await ack_outbox(message_id)
         acked += 1
-    if acked or waiting:
-        logger.info("outbox dispatch acked=%s waiting=%s", acked, waiting)
-    return {"acked": acked, "waiting": waiting}
+    if acked or waiting or delivered:
+        logger.info(
+            "outbox dispatch acked=%s waiting=%s peer_delivered=%s",
+            acked,
+            waiting,
+            delivered,
+        )
+    return {"acked": acked, "waiting": waiting, "peer_delivered": delivered}
 
 
 async def ack_outbox(message_id: str) -> None:
