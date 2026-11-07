@@ -9,7 +9,7 @@
 | 2 | PWA + WorkItem | `frontend/public` PWA、`work_items`/`conversations`/`triggers`、Artifact availability | 骨架已落地 |
 | 3 | Delivery + Supervisor | execution lease、ACK 三分、跨中心 outbox peer 投递、`supervisor.py` | 骨架已落地 |
 | 4 | 语音 Channel / 硬件 | `/api/v2/channels/interrupt`、硬件指令 `expires_at` / 急停 | 骨架已落地 |
-| 5 | Router / Mandate / worker | `domain/superagent/`、`cloud-worker/` | 骨架已落地 |
+| 5 | Router / Mandate / worker | `domain/superagent/`、Client Session、云端 turn 转发 | 主路径已接通（见 super-agent-alignment） |
 | 运维 | 云端自建单机发布 | [cloud-deploy.md](./cloud-deploy.md)、`scripts/deploy-cloud.sh` / `backup-cloud.sh` / `verify-cloud.sh`、systemd | 已落地 |
 
 ## PC 产品轨（App + 本地核心 + Node Agent）

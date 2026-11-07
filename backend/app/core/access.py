@@ -1,4 +1,4 @@
-"""接口身份。人类会话、执行节点和对话设备各自只能走自己的路径。"""
+"""接口身份。人类会话、执行节点、对话设备和 Client Session 各自只能走自己的路径。"""
 
 from __future__ import annotations
 
@@ -24,12 +24,14 @@ _PUBLIC_PATHS = {
     "/api/v2/openapi.json",
     "/api/v2/nodes/enroll",
     "/api/v2/enrollments",
+    "/api/v2/clients/enroll",
     "/api/fleet/enroll",
     "/api/fleet/handshake",
     "/api/fleet/handshake/accept",
     "/api/super-ai/device/enroll",
     "/api/super-ai/device/pair",
     "/api/super-ai/device/pair/status",
+    "/api/sources/feishu/events",
 }
 _NODE_RULES = (
     ("POST", re.compile(r"^/api/fleet/heartbeat$")),
@@ -51,6 +53,13 @@ _DEVICE_RULES = (
     ("POST", re.compile(r"^/api/super-ai/device/turn$")),
     ("GET", re.compile(r"^/api/super-ai/device/tasks/[^/]+$")),
 )
+_CLIENT_RULES = (
+    ("POST", re.compile(r"^/api/super-ai/client/turn$")),
+    ("GET", re.compile(r"^/api/super-ai/client/session/[^/]+$")),
+    ("GET", re.compile(r"^/api/super-ai/client/tasks/[^/]+$")),
+    ("POST", re.compile(r"^/api/v2/clients/refresh$")),
+    ("POST", re.compile(r"^/api/v2/clients/revoke$")),
+)
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 _EXACT_ORIGINS = {
     "tauri://localhost",
@@ -71,6 +80,8 @@ class Principal:
     kind: str
     node_id: str = ""
     role: str = ""
+    client_id: str = ""
+    center_id: str = ""
 
 
 def session_public(path: str) -> bool:
@@ -163,7 +174,26 @@ def path_allowed(principal: Principal, method: str, path: str) -> bool:
         return _matches(_NODE_RULES, method, path)
     if principal.kind == "device":
         return _matches(_DEVICE_RULES, method, path)
+    if principal.kind == "client":
+        return _matches(_CLIENT_RULES, method, path)
     return True
+
+
+async def resolve_client_token(client_token: str) -> Principal:
+    from app.core.client_session import ClientSessionError, authenticate
+
+    try:
+        principal = await authenticate(client_token)
+    except ClientSessionError as exc:
+        raise AuthError(exc.status_code, exc.detail) from exc
+    logger.debug("access client client_id=%s center=%s", principal.client_id, principal.center_id)
+    return Principal(
+        kind="client",
+        client_id=principal.client_id,
+        center_id=principal.center_id,
+        role="client",
+        node_id=principal.device_id,
+    )
 
 
 async def enforce(request: Request, settings) -> JSONResponse | None:
@@ -174,7 +204,23 @@ async def enforce(request: Request, settings) -> JSONResponse | None:
         return None
     node_token = request.headers.get("x-node-token") or ""
     device_token = request.headers.get("x-device-token") or ""
+    client_token = request.headers.get("x-client-token") or ""
     try:
+        presented = sum(1 for t in (node_token, device_token, client_token) if t)
+        if presented > 1:
+            raise AuthError(401, "send one credential")
+        if client_token:
+            principal = await resolve_client_token(client_token)
+            if not path_allowed(principal, request.method, path):
+                logger.info(
+                    "access denied status=403 method=%s path=%s kind=client client_id=%s",
+                    request.method,
+                    path,
+                    principal.client_id,
+                )
+                raise AuthError(403, "credential cannot call this endpoint")
+            request.state.principal = principal
+            return None
         if node_token or device_token:
             principal = await resolve_token(node_token, device_token)
             if not path_allowed(principal, request.method, path):

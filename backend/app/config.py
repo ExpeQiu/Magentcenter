@@ -58,6 +58,8 @@ class Settings(BaseSettings):
     agent_serial_execution: bool = True
 
     feishu_webhook_url: str = ""
+    # 飞书事件订阅 Verification Token（入站）；未配置则拒绝业务事件
+    feishu_verification_token: str = ""
     cron_alert_interval: int = 300
     cron_alert_enabled: bool = True
     gateway_alert_enabled: bool = True

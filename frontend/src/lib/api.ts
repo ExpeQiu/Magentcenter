@@ -34,6 +34,7 @@ import type {
   FleetScan,
   TaskInfo,
   TaskListResponse,
+  AttentionItem,
   WorkItemInfo,
   WorkspaceInfo,
 } from "./types";
@@ -262,6 +263,13 @@ export const api = {
       { method: "POST" }
     );
   },
+  attentionList: () => request<{ items: AttentionItem[] }>("/api/v2/attention"),
+  dismissAttention: (id: string) =>
+    request<{ ok: boolean; id: string; status: string }>(
+      `/api/v2/attention/${encodeURIComponent(id)}/dismiss`,
+      { method: "POST" }
+    ),
+  superagentOverview: () => request<Record<string, unknown>>("/api/v2/superagent/overview"),
   chain: (taskId: string) =>
     request<ChainEvent[]>(`/api/chain?task_id=${encodeURIComponent(taskId)}`),
   createTask: (data: {

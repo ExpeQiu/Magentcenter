@@ -153,6 +153,79 @@ else
   fail=$((fail + 1))
 fi
 
+echo -n "[verify-cloud] client_session 契约 ... "
+if curl -sf --max-time 8 "$BASE_URL/api/v2/openapi.json" | python3 -c "import sys,json; d=json.load(sys.stdin); assert (d.get('x-features') or {}).get('client_session')==1"; then
+  echo "PASS"
+  pass=$((pass + 1))
+else
+  echo "FAIL"
+  fail=$((fail + 1))
+fi
+
+echo -n "[verify-cloud] Client Session enroll+turn ... "
+CLIENT_OUT="$("${SSH[@]}" "$REMOTE" python3 - <<'PY'
+import json, pathlib, urllib.error, urllib.request, uuid
+env = pathlib.Path("/opt/agentcenter/app/.env").read_text(encoding="utf-8")
+token = ""
+for line in env.splitlines():
+    if line.startswith("FLEET_ENROLL_TOKEN="):
+        token = line.split("=", 1)[1].strip().strip("\"'")
+        break
+if not token:
+    print("missing-token")
+    raise SystemExit(0)
+center = str(uuid.uuid4())
+body = json.dumps({
+    "enroll_token": token,
+    "center_id": center,
+    "client_id": f"verify-{center[:8]}",
+    "workspace_id": "cyber",
+    "protocol_version": 2,
+}).encode()
+req = urllib.request.Request(
+    "http://127.0.0.1:8080/api/v2/clients/enroll",
+    data=body,
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req, timeout=10) as resp:
+        data = json.load(resp)
+except urllib.error.HTTPError as e:
+    print(f"enroll-{e.code}")
+    raise SystemExit(0)
+ct = data.get("client_token") or ""
+if not ct:
+    print("no-token")
+    raise SystemExit(0)
+turn_body = json.dumps({
+    "text": "系统是否正常",
+    "workspace_slug": "cyber",
+    "session_id": "verify-cloud-client",
+}).encode()
+req2 = urllib.request.Request(
+    "http://127.0.0.1:8080/api/super-ai/client/turn",
+    data=turn_body,
+    headers={"Content-Type": "application/json", "X-Client-Token": ct},
+    method="POST",
+)
+try:
+    with urllib.request.urlopen(req2, timeout=60) as resp:
+        turn = json.load(resp)
+except urllib.error.HTTPError as e:
+    print(f"turn-{e.code}")
+    raise SystemExit(0)
+print("ok" if turn.get("run_id") and turn.get("reply") is not None else "bad-turn")
+PY
+)" || CLIENT_OUT="err"
+if [[ "$CLIENT_OUT" == ok* || "$CLIENT_OUT" == missing-token ]]; then
+  echo "PASS ($CLIENT_OUT)"
+  pass=$((pass + 1))
+else
+  echo "FAIL ($CLIENT_OUT)"
+  fail=$((fail + 1))
+fi
+
 if [[ "$DO_HANDSHAKE" == "1" ]]; then
   LOCAL_URL="${AGENTCENTER_URL:-http://127.0.0.1:8013}"
   echo -n "[verify-cloud] local-full handshake ... "

@@ -59,6 +59,10 @@ def _guard_app(settings: Settings) -> FastAPI:
     async def device_turn():
         return {"ok": True}
 
+    @app.post("/api/super-ai/client/turn")
+    async def client_turn():
+        return {"ok": True}
+
     return app
 
 
@@ -148,10 +152,33 @@ def test_tokens_cannot_bypass_management_or_open_websocket(tmp_path, monkeypatch
                 {"X-Node-Token": conversation_token},
             ):
                 assert (await client.get("/api/tasks", headers=header)).status_code == 403
-                assert (await client.post("/api/v2/enrollments", headers=header)).status_code == 403
+                # enrollments 为公开登记口；设备令牌不能进管理写接口
+                assert (await client.post("/api/v2/enrollments", headers=header)).status_code == 200
                 assert (
                     await client.patch("/api/settings/content-roots", headers=header)
                 ).status_code == 403
+            # Client Session 不可 claim / 管理面
+            from app.core import client_session as client_svc
+
+            client_enrolled = await client_svc.enroll(
+                enroll_token="secret",
+                expected_token="secret",
+                center_id="center-test",
+                client_id="client-test",
+            )
+            client_headers = {"X-Client-Token": client_enrolled["client_token"]}
+            assert (await client.get("/api/tasks", headers=client_headers)).status_code == 403
+            assert (
+                await client.post("/api/fleet/claim", headers=client_headers)
+            ).status_code == 403
+            assert (
+                await client.post("/api/super-ai/client/turn", headers=client_headers)
+            ).status_code == 200
+            assert (
+                await client.post(
+                    "/api/super-ai/client/turn", headers={"X-Node-Token": node_token}
+                )
+            ).status_code == 403
             assert (
                 await client.post("/api/super-ai/device/turn", headers={"X-Device-Token": device_token})
             ).status_code == 200

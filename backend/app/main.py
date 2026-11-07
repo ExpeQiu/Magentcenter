@@ -319,6 +319,9 @@ def create_app() -> FastAPI:
     app.include_router(chain.router)
     app.include_router(fleet.router)
     app.include_router(v2.router)
+    from app.api import sources as sources_api
+
+    app.include_router(sources_api.router)
     app.include_router(ws.router)
     from app.core.static_ui import mount_static_ui
 

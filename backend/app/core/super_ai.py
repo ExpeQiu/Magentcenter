@@ -261,8 +261,33 @@ async def handle_turn(
     confirmation_id: str = "",
     session_id: str = "",
     subject_id: str = "local",
+    channel: str = "web",
+    origin: str = "super_ai",
+    client_id: str = "",
 ) -> SuperAiTurnResponse:
     from app.core import super_ai_session as sessions
+    from app.core import work_items as wi_svc
+
+    raw = (text or "").strip()
+    slug = _slug(workspace_slug)
+    if raw:
+        try:
+            ext = f"{channel}:{session_id or subject_id}:{uuid.uuid4().hex[:10]}"
+            await wi_svc.record_trigger(
+                source=channel or "web",
+                external_event_id=ext,
+                workspace_id=slug,
+                owner_id=client_id or subject_id or "local",
+                kind="super_ai_turn",
+                payload={
+                    "text": raw[:2000],
+                    "session_id": session_id,
+                    "client_id": client_id,
+                    "origin": origin,
+                },
+            )
+        except Exception:
+            logger.exception("super_ai trigger record failed channel=%s", channel)
 
     result = await _route_turn(
         text,
@@ -275,14 +300,50 @@ async def handle_turn(
         confirmation_id=confirmation_id,
         session_id=session_id,
         subject_id=subject_id,
+        channel=channel,
+        origin=origin,
+        client_id=client_id,
     )
-    raw = (text or "").strip()
     if raw and (session_id or "").strip() and result.intent != "empty":
         try:
             await sessions.remember(session_id, raw, result.reply)
         except Exception:
             logger.exception("super_ai session write failed session=%s", (session_id or "")[:12])
     return result
+
+
+async def _stop_active_work(
+    task_manager,
+    *,
+    workspace: str,
+    run_id: str,
+    started: float,
+) -> SuperAiTurnResponse:
+    """Router stop：取消工作区进行中任务并撤 Mandate。"""
+    try:
+        items, _total = await task_manager.list_tasks(
+            workspace_id=workspace, page=1, page_size=20
+        )
+    except Exception:
+        logger.exception("super_ai stop list failed workspace=%s", workspace)
+        items = []
+    stopped = 0
+    for item in items:
+        status = getattr(item, "status", "") or ""
+        task_id = getattr(item, "id", "") or ""
+        if status not in {"queued", "running"} or not task_id:
+            continue
+        try:
+            await task_manager.cancel_task(task_id)
+            stopped += 1
+        except Exception:
+            logger.exception("super_ai stop cancel failed task_id=%s", task_id)
+    if stopped:
+        reply = f"已停止 {stopped} 个进行中的任务，并撤销对应授权。"
+    else:
+        reply = "没有进行中的任务需要停止。"
+    logger.info("super_ai router stop applied run_id=%s stopped=%d", run_id, stopped)
+    return _finish(run_id, "cancel", "tasks", reply, started=started, workspace=workspace)
 
 
 async def _route_turn(
@@ -297,22 +358,10 @@ async def _route_turn(
     confirmation_id: str = "",
     session_id: str = "",
     subject_id: str = "local",
+    channel: str = "web",
+    origin: str = "super_ai",
+    client_id: str = "",
 ) -> SuperAiTurnResponse:
-    # Super-agent Router：结构化建议（不持工具）；过时策略由 Controller 否决
-    try:
-        from app.domain.superagent.router import controller_accept, evaluate
-
-        suggestion = await evaluate(text=text or "")
-        if suggestion.action == "stop" and controller_accept(
-            suggestion, expected_policy=1, actual_policy=1
-        ):
-            logger.info(
-                "super_ai router stop subject=%s reason=%s",
-                subject_id,
-                suggestion.reason,
-            )
-    except Exception:
-        logger.exception("super_ai router evaluate failed")
     started = time.perf_counter()
     run_id = uuid.uuid4().hex[:12]
     slug = _slug(workspace_slug)
@@ -321,6 +370,122 @@ async def _route_turn(
         return _finish(
             run_id, "empty", "", "说一句，或按住说话。", started=started, workspace=slug
         )
+
+    # Policy Gate：未授权来源不建单
+    from app.domain.superagent import policy as policy_svc
+    from app.domain.superagent import controller as work_ctrl
+    from app.domain.superagent.router import controller_accept, evaluate
+
+    pol = policy_svc.load_policy()
+    gate = policy_svc.gate(
+        source=channel or "web",
+        actor_id=client_id or subject_id,
+        addressed=True,
+        policy=pol,
+    )
+    if gate.strength == "deny":
+        logger.info(
+            "super_ai gate deny run_id=%s reason=%s source=%s",
+            run_id,
+            gate.reason,
+            channel,
+        )
+        return _finish(
+            run_id,
+            "clarify",
+            "",
+            "当前来源未授权使用超级AI，请用已绑定的客户端或控制台。",
+            started=started,
+            workspace=slug,
+        )
+
+    owner = await work_ctrl.resolve_followup(
+        session_id=session_id,
+        conversation_id=session_id,
+        work_item_id="",
+    )
+    force_new = work_ctrl.looks_like_new_work(raw)
+
+    try:
+        suggestion = await evaluate(
+            text=raw,
+            work_item_id=owner.work_item_id if owner else "",
+            policy_version=pol.version,
+            force_new=force_new,
+        )
+        if not controller_accept(
+            suggestion, expected_policy=pol.version, actual_policy=pol.version
+        ):
+            logger.info("super_ai router stale ignored action=%s", suggestion.action)
+        elif suggestion.action == "stop":
+            logger.info(
+                "super_ai router stop subject=%s client=%s reason=%s",
+                subject_id,
+                client_id or "-",
+                suggestion.reason,
+            )
+            return await _stop_active_work(
+                task_manager, workspace=slug, run_id=run_id, started=started
+            )
+        elif suggestion.action in {"revise", "attach"} and (suggestion.work_item_id or (owner and owner.work_item_id)):
+            wid = suggestion.work_item_id or (owner.work_item_id if owner else "")
+            attached = await work_ctrl.attach_followup(wid, note=raw)
+            if attached:
+                from app.core import delivery as delivery_svc
+                from app.core import supervisor as attention_svc
+
+                await delivery_svc.enqueue(
+                    kind="ack",
+                    work_item_id=attached.work_item_id,
+                    task_id=attached.task_id,
+                    summary="已记入进行中的工作，不重复建单。",
+                )
+                if suggestion.action == "revise":
+                    await attention_svc.open_question(
+                        summary=f"工作已修订，请确认是否继续执行：{(raw or '')[:200]}",
+                        work_item_id=attached.work_item_id,
+                        task_id=attached.task_id,
+                        kind="revise_confirm",
+                        dedupe_key=f"revise:{attached.work_item_id}:{run_id}",
+                    )
+                logger.info(
+                    "super_ai router %s work_item=%s run_id=%s",
+                    suggestion.action,
+                    attached.work_item_id,
+                    run_id,
+                )
+                return _finish(
+                    run_id,
+                    "dispatch",
+                    "work_items",
+                    "已记到进行中的工作主线，没有新建任务。"
+                    + (" 修订待你在「待办」确认。" if suggestion.action == "revise" else ""),
+                    task_id=attached.task_id,
+                    task_status="active",
+                    href=_href(slug, "work-items/detail", f"id={attached.work_item_id}"),
+                    started=started,
+                    workspace=slug,
+                )
+        elif suggestion.action == "ignore":
+            return _finish(
+                run_id, "empty", "", "我在。", started=started, workspace=slug
+            )
+        elif suggestion.action == "accept" and not policy_svc.allows_dispatch(gate):
+            logger.info(
+                "super_ai observe would_accept run_id=%s reason=%s",
+                run_id,
+                gate.reason,
+            )
+            return _finish(
+                run_id,
+                "chat",
+                "",
+                "（observe）已记录请求，当前策略不自动建单。",
+                started=started,
+                workspace=slug,
+            )
+    except Exception:
+        logger.exception("super_ai router evaluate failed")
 
     parsed = parse_turn(raw, pending, last_href, slug)
     try:
@@ -365,6 +530,8 @@ async def _route_turn(
                 task_manager,
                 started=started,
                 workspace=slug,
+                origin=origin,
+                session_id=session_id,
             )
         if confirmation_id and parsed.intent == "confirm_create":
             return await _commit_confirmation(
@@ -383,7 +550,14 @@ async def _route_turn(
                     run_id, pending, slug, task_manager, started=started, workspace=slug
                 )
             return await _commit_create(
-                run_id, pending, slug, task_manager, started=started, workspace=slug
+                run_id,
+                pending,
+                slug,
+                task_manager,
+                started=started,
+                workspace=slug,
+                origin=origin,
+                session_id=session_id,
             )
         if parsed.intent == "list_tasks":
             return await _list_tasks(
@@ -629,6 +803,8 @@ async def _ask_model(
         task_manager,
         started=started,
         workspace=workspace,
+        origin="super_ai",
+        session_id=session_id,
     )
 
 
@@ -640,6 +816,8 @@ async def _dispatch_hit(
     *,
     started,
     workspace,
+    origin: str = "super_ai",
+    session_id: str = "",
 ):
     """名册命中后直接派发，不再等「确认」。"""
     local = bool(hit.get("local"))
@@ -654,11 +832,24 @@ async def _dispatch_hit(
     )
     if local:
         result = await _commit_create(
-            run_id, pending, workspace, task_manager, started=started, workspace=workspace
+            run_id,
+            pending,
+            workspace,
+            task_manager,
+            started=started,
+            workspace=workspace,
+            origin=origin,
+            session_id=session_id,
         )
     else:
         result = await _commit_peer(
-            run_id, pending, workspace, task_manager, started=started, workspace=workspace
+            run_id,
+            pending,
+            workspace,
+            task_manager,
+            started=started,
+            workspace=workspace,
+            origin=origin,
         )
     result.intent = "dispatch"
     result.dispatch = True
@@ -674,7 +865,16 @@ async def _dispatch_hit(
     return result
 
 
-async def _commit_peer(run_id, pending: SuperAiPending, slug, task_manager, *, started, workspace):
+async def _commit_peer(
+    run_id,
+    pending: SuperAiPending,
+    slug,
+    task_manager,
+    *,
+    started,
+    workspace,
+    origin: str = "super_ai",
+):
     wid = await workspace_service.resolve_workspace_id(slug) or ""
     try:
         info = await fleet_service.call_peer_as_cloud(
@@ -684,6 +884,7 @@ async def _commit_peer(run_id, pending: SuperAiPending, slug, task_manager, *, s
             prompt=pending.prompt,
             task_manager=task_manager,
             workspace_id=wid,
+            origin=origin,
         )
     except fleet_service.FleetError:
         logger.exception(
@@ -718,7 +919,17 @@ async def _commit_peer(run_id, pending: SuperAiPending, slug, task_manager, *, s
     )
 
 
-async def _dispatch_local(run_id, prompt, registry, task_manager, *, started, workspace):
+async def _dispatch_local(
+    run_id,
+    prompt,
+    registry,
+    task_manager,
+    *,
+    started,
+    workspace,
+    origin: str = "super_ai",
+    session_id: str = "",
+):
     """固定说法的建任务也直接执行。"""
     body = (prompt or "").strip(" ：:，,。")
     if not body:
@@ -748,7 +959,14 @@ async def _dispatch_local(run_id, prompt, registry, task_manager, *, started, wo
         runtime=agent.runtime,
     )
     result = await _commit_create(
-        run_id, pending, workspace, task_manager, started=started, workspace=workspace
+        run_id,
+        pending,
+        workspace,
+        task_manager,
+        started=started,
+        workspace=workspace,
+        origin=origin,
+        session_id=session_id,
     )
     result.intent = "dispatch"
     result.dispatch = True
@@ -807,11 +1025,23 @@ async def _commit_confirmation(
     )
     if action == "call_peer":
         result = await _commit_peer(
-            run_id, pending, slug, task_manager, started=started, workspace=workspace
+            run_id,
+            pending,
+            slug,
+            task_manager,
+            started=started,
+            workspace=workspace,
+            origin="super_ai",
         )
     else:
         result = await _commit_create(
-            run_id, pending, slug, task_manager, started=started, workspace=workspace
+            run_id,
+            pending,
+            slug,
+            task_manager,
+            started=started,
+            workspace=workspace,
+            origin="super_ai",
         )
     if target.get("source") == "model":
         result.dispatch = True
@@ -821,7 +1051,17 @@ async def _commit_confirmation(
     return result
 
 
-async def _commit_create(run_id, pending: SuperAiPending, slug, task_manager, *, started, workspace):
+async def _commit_create(
+    run_id,
+    pending: SuperAiPending,
+    slug,
+    task_manager,
+    *,
+    started,
+    workspace,
+    origin: str = "super_ai",
+    session_id: str = "",
+):
     wid = await workspace_service.resolve_workspace_id(slug) or ""
     task = await task_manager.create_task(
         CreateTaskRequest(
@@ -830,18 +1070,33 @@ async def _commit_create(run_id, pending: SuperAiPending, slug, task_manager, *,
             runtime=pending.runtime,
             workspace_id=wid,
             node_id=pending.node_id or "",
+            origin="super_ai" if origin == "super_ai" else "local",
         )
     )
+    work_id = ""
     try:
         from app.core import work_items as wi_svc
+        from app.core import delivery as delivery_svc
+        from app.domain.superagent import controller as work_ctrl
 
+        if session_id:
+            await wi_svc.ensure_conversation(session_id, workspace_id=wid or "cyber")
         work_id = await wi_svc.create_work_item(
             title=(pending.prompt or "")[:80],
             goal=pending.prompt or "",
             workspace_id=wid or "cyber",
+            conversation_id=session_id or "",
             task_id=task.id,
         )
         await wi_svc.bind_task(work_id, task.id)
+        if session_id:
+            await work_ctrl.bind_conversation(session_id, work_id)
+        await delivery_svc.enqueue(
+            kind="ack",
+            work_item_id=work_id,
+            task_id=task.id,
+            summary=f"已接单：{(pending.prompt or '')[:120]}",
+        )
         logger.info(
             "super_ai work_item linked run_id=%s work_item=%s task_id=%s",
             run_id,

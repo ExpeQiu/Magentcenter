@@ -38,6 +38,7 @@ export function Sidebar({ healthLabel, onNavigate }: SidebarProps) {
       kanban: { href: wp.kanban(), label: "办公室", icon: "🏢" },
       tasks: { href: wp.tasks(), label: "任务", icon: "📋" },
       workItems: { href: wp.workItems(), label: "工作", icon: "📎" },
+      attention: { href: wp.attention(), label: "待办", icon: "⚠" },
       workflow: { href: wp.projects(), label: "workflow", icon: "🔁" },
       agents: { href: wp.agents(), label: "Agents", icon: "🤖" },
       squads: { href: wp.squads(), label: "小队", icon: "👥" },

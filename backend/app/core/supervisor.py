@@ -138,6 +138,49 @@ async def list_open(limit: int = 50) -> list[dict]:
                 "task_id": r.task_id,
                 "execution_id": r.execution_id,
                 "work_item_id": r.work_item_id,
+                "status": r.status,
+                "created_at": r.created_at.isoformat() + "Z" if r.created_at else "",
             }
             for r in rows
         ]
+
+
+async def open_question(
+    *,
+    summary: str,
+    work_item_id: str = "",
+    task_id: str = "",
+    kind: str = "question",
+    dedupe_key: str = "",
+) -> str | None:
+    """结构化待人工问题（禁止从自由文本推断）。"""
+    key = (dedupe_key or "").strip() or f"{kind}:{work_item_id or task_id or uuid.uuid4().hex[:12]}"
+    before = await list_open(limit=200)
+    await _open_attention(
+        dedupe_key=key,
+        kind=kind,
+        summary=(summary or "").strip()[:2000],
+        work_item_id=work_item_id,
+        task_id=task_id,
+    )
+    after = {i["id"] for i in await list_open(limit=200)}
+    created = after - {i["id"] for i in before}
+    return next(iter(created), None)
+
+
+async def dismiss(attention_id: str) -> bool:
+    aid = (attention_id or "").strip()
+    if not aid:
+        return False
+    factory = get_session_factory()
+    async with factory() as session:
+        row = await session.get(AttentionRecord, aid)
+        if row is None:
+            return False
+        if row.status != "open":
+            return True
+        row.status = "dismissed"
+        row.closed_at = _now()
+        await session.commit()
+    logger.info("attention dismissed id=%s", aid)
+    return True

@@ -124,6 +124,8 @@ class CreateTaskRequest(BaseModel):
     inject_knowledge: bool | None = None
     # 高风险且召回为空时仍派发，但记下「已跳过门禁」
     skip_knowledge_gate: bool = False
+    # super_ai = 经超级AI；local = 任务台/Autopilot 等本地自闭环
+    origin: Literal["local", "super_ai"] = "local"
 
 
 class UpdateTaskRequest(BaseModel):

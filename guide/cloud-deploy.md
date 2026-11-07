@@ -74,6 +74,13 @@
 | P2 | cloud-worker + Router/Mandate | `scripts/run-cloud-worker.sh`、`domain/superagent/` |
 | P3 | HTTPS 反代 + 备份校验 | `scripts/cloud/nginx-agentcenter.conf.snippet`、`backup-cloud.sh` integrity |
 
+### Client Session（跨端超级AI）
+
+- 其它端用 `POST /api/v2/clients/enroll`（`FLEET_ENROLL_TOKEN` + 本机 `center_id`）换取 `X-Client-Token`
+- 对话：`POST /api/super-ai/client/turn`；不可用于 `claim-next`
+- PC full 已绑定云端时，本机 `/api/super-ai/turn` 自动转发云端 Client turn；任务 `origin=super_ai`、`owner_center_id` 为云端
+- 验收：`verify-cloud.sh` 含 `client_session` 契约与 enroll+turn 冒烟；详见 [super-agent-alignment.md](./super-agent-alignment.md)
+
 发布后建议：本机 `./scripts/deploy-cloud.sh` → `./scripts/verify-cloud.sh --local-full`；需要 TLS 时套用 nginx 片段。
 
 ## 6. 回滚

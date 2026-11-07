@@ -25,6 +25,7 @@ export const paths = {
     fleet: () => `/${slug}/fleet`,
     workItems: () => `/${slug}/work-items`,
     workItemDetail: (id: string) => `/${slug}/work-items/detail?id=${enc(id)}`,
+    attention: () => `/${slug}/attention`,
   }),
 } as const;
 

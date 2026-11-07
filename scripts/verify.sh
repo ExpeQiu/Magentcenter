@@ -202,7 +202,7 @@ else
 fi
 
 # 多端改造：无云本地闭环、协议契约、voice/connector 共存单测
-check "无云本地闭环协议" "curl -sf '$BASE_URL/api/v2/openapi.json' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('x-protocol-version')==2; assert (d.get('x-features') or {}).get('superagent_control')==1; assert '跨中心投递尚未闭环' not in (d.get('info') or {}).get('description','')\""
+check "无云本地闭环协议" "curl -sf '$BASE_URL/api/v2/openapi.json' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('x-protocol-version')==2; f=d.get('x-features') or {}; assert f.get('superagent_control')==1; assert f.get('client_session')==1; assert '跨中心投递尚未闭环' not in (d.get('info') or {}).get('description','')\""
 
 check "健康含 center" "curl -sf '$BASE_URL/api/health' | python3 -c \"import sys,json; d=json.load(sys.stdin); assert d.get('status')=='ok'\""
 
@@ -218,6 +218,70 @@ check "单测 autonomy" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-veri
 check "单测 claim-next" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-claim AI_MOCK_MODE=true $PY -m pytest tests/test_claim_next.py -q --tb=line"
 check "单测 supervisor" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-sup AI_MOCK_MODE=true $PY -m pytest tests/test_supervisor.py -q --tb=line"
 check "单测 artifact availability" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-art AI_MOCK_MODE=true $PY -m pytest tests/test_artifact_availability.py -q --tb=line"
+check "单测 client session" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-client AI_MOCK_MODE=true $PY -m pytest tests/test_client_session.py -q --tb=line"
+check "单测 super_ai origin" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-origin AI_MOCK_MODE=true $PY -m pytest tests/test_super_ai_origin.py -q --tb=line"
+check "单测 P0/P1 控制面" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-p0p1 AI_MOCK_MODE=true $PY -m pytest tests/test_superagent_p0_p1.py -q --tb=line"
+check "单测 P2 飞书/槽位/Overview" "cd '$ROOT/backend' && AGENTCENTER_DATA_DIR=/tmp/ac-verify-p2 AI_MOCK_MODE=true $PY -m pytest tests/test_p2_feishu_slots.py -q --tb=line"
+
+# 本地建单 origin=local；超级AI 建单 origin=super_ai（本机即协调器时）
+echo -n "[verify] origin 边界 ... "
+ORIGIN_OUT="$(
+  BASE_URL="$BASE_URL" $PY - <<'PY' 2>/dev/null || true
+import json, os, urllib.error, urllib.request
+base = os.environ.get("BASE_URL", "http://127.0.0.1:8013")
+session = os.environ.get("AGENTCENTER_SESSION") or os.environ.get("AC_SESSION") or ""
+
+def req(method, path, body=None):
+    data_b = None if body is None else json.dumps(body).encode()
+    r = urllib.request.Request(base + path, data=data_b, method=method)
+    r.add_header("Content-Type", "application/json")
+    if session:
+        r.add_header("X-AgentCenter-Session", session)
+    with urllib.request.urlopen(r, timeout=30) as resp:
+        return json.loads(resp.read().decode() or "{}")
+
+try:
+    local = req("POST", "/api/tasks", {
+        "agent_id": "coder",
+        "runtime": "openclaw",
+        "prompt": "verify origin local",
+        "node_id": "local",
+    })
+except urllib.error.HTTPError as e:
+    print(f"skip-auth-{e.code}" if e.code in (401, 403) else f"fail-local-{e.code}")
+    raise SystemExit(0)
+if (local.get("origin") or "local") != "local":
+    print("fail-local-origin")
+    raise SystemExit(0)
+try:
+    turn = req("POST", "/api/super-ai/turn", {
+        "text": "新建任务：verify origin super_ai",
+        "workspace_slug": "cyber",
+        "session_id": "verify-origin",
+    })
+except urllib.error.HTTPError as e:
+    # 联网转发云端失败时允许 skip
+    if e.code in (503, 502):
+        print("skip-cloud-down")
+        raise SystemExit(0)
+    print(f"fail-turn-{e.code}")
+    raise SystemExit(0)
+tid = turn.get("task_id") or ""
+if not tid:
+    print("ok-no-dispatch")
+    raise SystemExit(0)
+info = req("GET", f"/api/tasks/{tid}")
+origin = info.get("origin") or ""
+print("ok" if origin == "super_ai" else f"fail-origin-{origin}")
+PY
+)"
+if [[ "$ORIGIN_OUT" == ok* || "$ORIGIN_OUT" == skip-* ]]; then
+  echo "PASS ($ORIGIN_OUT)"
+  pass=$((pass + 1))
+else
+  echo "FAIL ($ORIGIN_OUT)"
+  fail=$((fail + 1))
+fi
 
 # 无云 E2E：Core 已起时，用 bootstrap token + claim-next/finish 跑通一条任务
 echo -n "[verify] 无云 E2E claim-next ... "

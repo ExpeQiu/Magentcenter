@@ -61,6 +61,17 @@ export interface WorkItemInfo {
   updated_at: string;
 }
 
+export interface AttentionItem {
+  id: string;
+  kind: string;
+  summary: string;
+  task_id: string;
+  execution_id: string;
+  work_item_id: string;
+  status?: string;
+  created_at?: string;
+}
+
 export interface TaskInfo {
   id: string;
   workspace_id: string;

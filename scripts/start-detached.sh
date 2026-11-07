@@ -18,6 +18,13 @@ if [[ -f "$ROOT/.env" ]]; then
   set +a
 fi
 
+# 与 start.sh 一致：本机数据放在应用目录，避免相对路径落到 backend/data
+APP_SUPPORT="${HOME}/Library/Application Support/AgentCenter"
+export AGENTCENTER_DATA_DIR="${AGENTCENTER_DATA_DIR:-$APP_SUPPORT/data}"
+export AGENTCENTER_LOG_DIR="${AGENTCENTER_LOG_DIR:-$HOME/Library/Logs/AgentCenter}"
+mkdir -p "$AGENTCENTER_DATA_DIR" "$AGENTCENTER_LOG_DIR"
+export DATABASE_URL="sqlite+aiosqlite:///${AGENTCENTER_DATA_DIR}/agentcenter.db"
+
 # 停止旧 screen 会话
 screen -S agentcenter-api -X quit 2>/dev/null || true
 screen -S agentcenter-web -X quit 2>/dev/null || true
@@ -41,8 +48,7 @@ fi
 # 后端
 screen -dmS agentcenter-api bash -c "
   cd '$BACKEND' && \
-  source '$VENV/bin/activate' && \
-  exec uvicorn app.main:app --host \${HOST:-127.0.0.1} --port $PORT \
+  exec '$VENV/bin/python' -m uvicorn app.main:app --host \${HOST:-127.0.0.1} --port $PORT \
     >> '$ROOT/logs/agentcenter.log' 2>&1
 "
 

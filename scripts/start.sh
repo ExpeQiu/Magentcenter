@@ -84,7 +84,7 @@ else
 
   echo "[start] 启动 AgentCenter API (host=$HOST port=$PORT profile=${DEPLOY_PROFILE:-full})..."
   cd "$BACKEND"
-  nohup "$VENV/bin/uvicorn" app.main:app --host "$HOST" --port "$PORT" \
+  nohup "$VENV/bin/python" -m uvicorn app.main:app --host "$HOST" --port "$PORT" \
     >> "$LOG_FILE" 2>&1 </dev/null &
   _ac_write_pid core $!
   disown 2>/dev/null || true

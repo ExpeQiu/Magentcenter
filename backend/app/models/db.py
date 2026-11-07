@@ -609,6 +609,24 @@ class MandateRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
+class ClientSessionRecord(Base):
+    """Center/Client Session：对话身份，不可领取执行任务。"""
+
+    __tablename__ = "client_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    center_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    workspace_id: Mapped[str] = mapped_column(String(64), index=True, default="")
+    device_id: Mapped[str] = mapped_column(String(64), default="")
+    token_hash: Mapped[str] = mapped_column(String(64), index=True, default="")
+    scopes_json: Mapped[str] = mapped_column(Text, default='["super_ai.turn"]')
+    revoked: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_seen: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
 class HardwareCommandRecord(Base):
     """带有效期的硬件指令；过期/重复拒绝。"""
 

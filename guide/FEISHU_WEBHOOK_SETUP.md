@@ -1,53 +1,46 @@
 # 飞书 Webhook 配置指南
 
-## 获取 Webhook URL
+出站（告警 / 超级AI 回帖）用群机器人 Webhook；入站（@机器人 → 超级AI）用事件订阅回调。
 
-### 方式一：通过飞书群机器人（推荐）
+## 出站：群机器人 Webhook
 
-1. 打开目标飞书群
-2. 设置 → 群机器人 → 添加机器人 → 自定义机器人
-3. 机器人名称：`AgentCenter Alert`
-4. 安全设置：选择「使用签名校验」或「IP地址段」
-5. 复制 Webhook URL（格式：`https://open.feishu.cn/open-apis/bot/v2/hook/xxx`）
+1. 打开目标飞书群 → 设置 → 群机器人 → 自定义机器人
+2. 复制 Webhook URL（`https://open.feishu.cn/open-apis/bot/v2/hook/xxx`）
+3. 写入 `.env`：
 
-### 方式二：使用 lark-cli 创建
-
-```bash
-# 查看现有机器人
-lark-cli bot list
-
-# 获取群信息
-lark-cli im chats list
-```
-
-## 配置步骤
-
-1. 编辑 `.env` 文件：
 ```bash
 FEISHU_WEBHOOK_URL=https://open.feishu.cn/open-apis/bot/v2/hook/你的实际URL
 CRON_ALERT_INTERVAL=300
 ```
 
-2. 重启 AgentCenter：
+4. 重启：`./scripts/stop.sh && ./scripts/start-all.sh`
+5. 验证：`curl -sf http://localhost:8013/api/cron-alerts`
+
+告警条件：Cron 首次变 `error`；间隔由 `CRON_ALERT_INTERVAL`（默认 300s）控制。
+
+## 入站：事件订阅 → 超级AI
+
+1. 飞书开放平台创建企业自建应用，开通「接收消息」等权限，订阅 `im.message.receive_v1`
+2. 请求地址填：`https://<你的公网>/api/sources/feishu/events`（需可被飞书访问）
+3. 将 Verification Token 写入 `.env`：
+
 ```bash
-./scripts/stop.sh && ./scripts/start-all.sh
+FEISHU_VERIFICATION_TOKEN=你的VerificationToken
 ```
 
-## 验证告警
+4. 重启后完成 URL 校验（接口对 `url_verification` 回传 `challenge`）
+5. 群聊须 @ 机器人；单聊直接进超级AI。同 `message_id` 幂等去重。
+6. Policy Gate 来源 `feishu`；出站回帖复用 `FEISHU_WEBHOOK_URL`
 
-确认配置后，触发一个 Cron error 检查，看飞书群是否收到消息：
+快速探测：
 
 ```bash
-curl http://localhost:8013/api/cron-alerts
+curl -s http://localhost:8013/api/sources/feishu/events \
+  -H 'Content-Type: application/json' \
+  -d '{"type":"url_verification","challenge":"ping","token":"'$FEISHU_VERIFICATION_TOKEN'"}'
 ```
 
-## 告警触发条件
-
-- Cron 任务状态变为 `error`
-- 同一任务只在首次出错时告警（防止重复）
-- 告警间隔：`CRON_ALERT_INTERVAL` 秒（默认 300s = 5分钟）
-
-## 目标群
+## 目标群（示例）
 
 - **统一推送群**：`oc_f734d856374cfe9e228a222d02f9e75f`
 - **情报中心群**：`oc_ffd151ec2bf245e9332226bd1701fed6`

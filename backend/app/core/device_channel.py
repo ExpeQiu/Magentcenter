@@ -274,6 +274,8 @@ async def device_turn(
         confirmation_id=confirmation_id,
         session_id=session_id or rec.id,
         subject_id=rec.id,
+        channel=channel or "voice",
+        origin="super_ai",
     )
     limit = _DESKTOP_LIMIT if channel == "desktop" else _VOICE_LIMIT
     result.reply = _clip_reply(result.reply, limit)

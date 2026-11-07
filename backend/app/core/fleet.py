@@ -881,6 +881,7 @@ async def call_peer(
     prompt: str,
     task_manager: Any,
     workspace_id: str = "",
+    origin: str = "local",
 ) -> dict[str, Any]:
     """已绑定的任意端（含云端本机）让另一端上的智能体或子智能体执行任务。"""
     caller = await _bound_caller(caller_id)
@@ -908,6 +909,7 @@ async def call_peer(
             runtime=runtime,  # type: ignore[arg-type]
             workspace_id=owner,
             node_id=plan["node_id"],
+            origin="super_ai" if origin == "super_ai" else "local",
         )
     )
     target_rec = await get_node(plan["node_id"])
@@ -979,6 +981,7 @@ async def call_peer_as_cloud(
     prompt: str,
     task_manager: Any,
     workspace_id: str = "",
+    origin: str = "super_ai",
 ) -> dict[str, Any]:
     """云端协调器自己作为调用方，使用已绑定的本机节点。"""
     nodes = await list_nodes(workspace_id)
@@ -995,6 +998,7 @@ async def call_peer_as_cloud(
         prompt=prompt,
         task_manager=task_manager,
         workspace_id=workspace_id or local[0].get("workspace_id") or "",
+        origin=origin,
     )
 
 

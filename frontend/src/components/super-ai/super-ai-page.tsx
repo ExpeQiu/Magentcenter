@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { Avatar, type AvatarPhase } from "@/components/super-ai/avatar";
+import { OverviewStrip } from "@/components/super-ai/overview-strip";
 import {
   api,
   type SuperAiPending,
@@ -491,6 +492,7 @@ export function SuperAiPage() {
           </Link>
         </div>
       </header>
+      <OverviewStrip />
       {providerOpen ? (
         <form
           className="flex flex-wrap items-end gap-2 border-b border-slate-800 px-5 py-3 text-sm"

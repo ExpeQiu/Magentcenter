@@ -35,6 +35,7 @@ async def evaluate(
     work_item_id: str = "",
     roster_hits: list[str] | None = None,
     policy_version: int = 1,
+    force_new: bool = False,
 ) -> RouteSuggestion:
     """规则版 Router（Mock / 无模型时）。模型路径由 workers 注入。"""
     text = (text or "").strip()
@@ -47,19 +48,35 @@ async def evaluate(
             work_item_id=work_item_id,
             evidence=["keyword:stop"],
         )
-    if work_item_id and any(k in text for k in ("改成", "修改", "再加上")):
-        return RouteSuggestion(
-            action="revise",
-            reason="followup_revise",
-            work_item_id=work_item_id,
-            evidence=["keyword:revise"],
-        )
+    if work_item_id and not force_new:
+        if any(k in text for k in ("改成", "修改", "再加上", "继续", "补充")):
+            return RouteSuggestion(
+                action="revise",
+                reason="followup_revise",
+                work_item_id=work_item_id,
+                evidence=["keyword:revise"],
+            )
+        # 已有进行中 WorkItem：默认 attach，避免重复建单
+        if not any(k in text for k in ("新建任务", "另建", "新开一个")):
+            return RouteSuggestion(
+                action="attach",
+                reason="followup_attach",
+                work_item_id=work_item_id,
+                evidence=["active_work_item"],
+            )
     if roster_hits:
         return RouteSuggestion(
             action="accept",
             reason="roster_dispatch",
             work_item_id=work_item_id,
             evidence=[f"roster:{h}" for h in roster_hits[:3]],
+        )
+    if any(k in text for k in ("帮我", "新建任务", "做一下", "执行")):
+        return RouteSuggestion(
+            action="accept",
+            reason="explicit_request",
+            work_item_id=work_item_id,
+            evidence=["keyword:accept"],
         )
     if len(text) < 2:
         return RouteSuggestion(action="ignore", reason="empty")

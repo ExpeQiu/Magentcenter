@@ -256,6 +256,24 @@ async def claim_next(node_id: str) -> dict | None:
             ).scalars().first()
             if live is not None:
                 continue
+            # Mandate：有 WorkItem 时须允许 task.execute
+            from app.models.db import WorkItemRecord
+            from app.domain.superagent import mandate as mandate_svc
+
+            work = (
+                await session.execute(
+                    select(WorkItemRecord).where(WorkItemRecord.task_id == task.id)
+                )
+            ).scalar_one_or_none()
+            if work is not None:
+                allowed = await mandate_svc.is_action_allowed(work.id, "task.execute")
+                if not allowed:
+                    logger.info(
+                        "claim_next skipped mandate task_id=%s work_item=%s",
+                        task.id,
+                        work.id,
+                    )
+                    continue
             task.node_id = node_id
             task.updated_at = _now()
             execution_id = str(uuid.uuid4())
@@ -682,13 +700,27 @@ async def finish_execution(
     """Node Agent 回写结果。代次不符则拒绝（迟到回写）。"""
     if status not in {"completed", "failed", "cancelled", "timeout"}:
         raise ClaimError("status must be completed|failed|cancelled|timeout", 400)
+    # Mandate：有 WorkItem 时 finish 视为 task.execute 收尾
+    from app.models.db import WorkItemRecord
+    from app.domain.superagent import mandate as mandate_svc
+
+    factory = get_session_factory()
+    async with factory() as session:
+        work = (
+            await session.execute(
+                select(WorkItemRecord).where(WorkItemRecord.task_id == task_id)
+            )
+        ).scalar_one_or_none()
+        if work is not None:
+            allowed = await mandate_svc.is_action_allowed(work.id, "task.execute")
+            if not allowed:
+                raise ClaimError("mandate does not allow task.execute", 403)
     exec_status = {
         "completed": "succeeded",
         "failed": "failed",
         "cancelled": "stopped",
         "timeout": "interrupted",
     }[status]
-    factory = get_session_factory()
     async with factory() as session:
         task = await session.get(TaskRecord, task_id)
         if task is None:
@@ -727,6 +759,27 @@ async def finish_execution(
         task.duration_ms = int(duration_ms or 0)
         task.updated_at = _now()
         await session.commit()
+    # 沉默交付：只对外发 result / failed，不发 progress
+    try:
+        from app.core import delivery as delivery_svc
+        from app.core import supervisor as attention_svc
+
+        kind = "result" if status == "completed" else "failed"
+        summary = (output or error or status)[:500]
+        await delivery_svc.enqueue(
+            kind=kind,  # type: ignore[arg-type]
+            task_id=task_id,
+            summary=summary,
+        )
+        if status in {"failed", "timeout"}:
+            await attention_svc.open_question(
+                summary=f"任务{status}：{summary[:200]}",
+                task_id=task_id,
+                kind="execution_failed",
+                dedupe_key=f"fail:{task_id}:{status}",
+            )
+    except Exception:
+        logger.exception("silent delivery after finish failed task_id=%s", task_id)
     logger.info(
         "execution finished node_id=%s task_id=%s status=%s generation=%s",
         node_id,

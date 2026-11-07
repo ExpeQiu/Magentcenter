@@ -264,8 +264,8 @@ class TaskManager:
                 due_date=req.due_date or "",
                 node_id=stamped_node,
                 owner_center_id=ident.center_id,
-                origin="local",
-                visibility="private",
+                origin=(req.origin if req.origin in ("local", "super_ai") else "local"),
+                visibility="private" if (req.origin or "local") == "local" else "shared",
             )
             session.add(rec)
             await session.commit()
@@ -273,7 +273,7 @@ class TaskManager:
             info = self._record_to_info(rec)
 
         logger.info(
-            "task created id=%s runtime=%s agent=%s project=%s workspace=%s inject=%s gate=%s center_id=%s",
+            "task created id=%s runtime=%s agent=%s project=%s workspace=%s inject=%s gate=%s center_id=%s origin=%s",
             task_id,
             runtime,
             req.agent_id,
@@ -282,6 +282,7 @@ class TaskManager:
             want_inject,
             bool(gate_note),
             ident.center_id,
+            getattr(req, "origin", None) or "local",
         )
         if gate_note:
             await self._emit(
@@ -393,7 +394,10 @@ class TaskManager:
                 await self._run_task(task_id, req)
 
     async def _run_task(self, task_id: str, req: CreateTaskRequest) -> None:
-        from app.core.execution import ack_cancel, current_execution, mark
+        from app.core.execution import current_execution, mark
+        from app.core.worker_slots import get_pool
+        from app.models.db import WorkItemRecord, get_session_factory
+        from sqlalchemy import select
 
         self._cancel_flags[task_id] = False
         execution = await current_execution(task_id)
@@ -411,7 +415,59 @@ class TaskManager:
             timeout = req.timeout or self.settings.hermes_default_timeout
         else:
             timeout = req.timeout or self.settings.openclaw_default_timeout
+        # 每 Ticket 独立 session，避免并发污染
         session_id = req.resume_session_id or f"agentcenter-{uuid.uuid4().hex[:12]}"
+        work_item_id = ""
+        try:
+            factory = get_session_factory()
+            async with factory() as session:
+                work = (
+                    await session.execute(
+                        select(WorkItemRecord).where(WorkItemRecord.task_id == task_id)
+                    )
+                ).scalar_one_or_none()
+                if work is not None:
+                    work_item_id = work.id
+        except Exception:
+            logger.exception("worker slot work_item lookup failed task_id=%s", task_id)
+        pool = get_pool(self.settings.execution_slots() or self.settings.max_concurrent_tasks)
+        lease = await pool.try_acquire(
+            task_id,
+            work_item_id=work_item_id,
+            session_id=session_id,
+            agent_key=agent_lock_key(runtime, req.agent_id),
+        )
+        if lease is None:
+            await self._update_task(
+                task_id, status="queued", error="waiting for worker slot"
+            )
+            await mark(execution_id, "accepted")
+            logger.warning("worker slot unavailable task_id=%s requeued", task_id)
+            return
+        try:
+            await self._execute_leased_task(
+                task_id,
+                req,
+                execution_id=execution_id,
+                runtime=runtime,
+                session_id=session_id,
+                timeout=timeout,
+            )
+        finally:
+            await pool.release(task_id)
+
+    async def _execute_leased_task(
+        self,
+        task_id: str,
+        req: CreateTaskRequest,
+        *,
+        execution_id: str,
+        runtime: str,
+        session_id: str,
+        timeout: int,
+    ) -> None:
+        from app.core.execution import ack_cancel, mark
+
         output_parts: list[str] = []
         tools_used: list[str] = []
         final_status = "failed"
@@ -681,10 +737,47 @@ class TaskManager:
 
     async def cancel_task(self, task_id: str) -> TaskInfo | None:
         from app.core.execution import request_cancel
+        from app.domain.superagent import mandate as mandate_svc
+        from app.models.db import MandateRecord, WorkItemRecord, get_session_factory
+        from sqlalchemy import select
 
         task = await self.get_task(task_id)
         if not task:
             return None
+        # Mandate 执法：有关联 WorkItem 时须持有 task.cancel
+        factory = get_session_factory()
+        async with factory() as session:
+            work = (
+                await session.execute(
+                    select(WorkItemRecord).where(WorkItemRecord.task_id == task_id)
+                )
+            ).scalar_one_or_none()
+            if work is not None:
+                allowed = await mandate_svc.is_action_allowed(work.id, "task.cancel")
+                if not allowed:
+                    logger.info(
+                        "cancel denied by mandate task_id=%s work_item=%s",
+                        task_id,
+                        work.id,
+                    )
+                    raise ValueError("mandate does not allow task.cancel")
+                mandates = (
+                    await session.execute(
+                        select(MandateRecord).where(
+                            MandateRecord.work_item_id == work.id,
+                            MandateRecord.status == "active",
+                        )
+                    )
+                ).scalars().all()
+                for row in mandates:
+                    row.status = "revoked"
+                if mandates:
+                    await session.commit()
+                    logger.info(
+                        "mandates revoked on cancel work_item=%s count=%d",
+                        work.id,
+                        len(mandates),
+                    )
         if task.status in {"completed", "failed", "timeout"}:
             task.status_detail = "already_finished"
             logger.info("cancel kept finished task id=%s status=%s", task_id, task.status)

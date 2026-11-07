@@ -48,6 +48,9 @@ def openapi_document() -> dict:
         "/api/v2/nodes/enroll",
         "/api/v2/nodes/heartbeat",
         "/api/v2/nodes/revoke-local",
+        "/api/v2/clients/enroll",
+        "/api/v2/clients/refresh",
+        "/api/v2/clients/revoke",
         "/api/v2/delegations",
         "/api/v2/commands/claim",
         "/api/v2/commands/claim-next",
@@ -65,7 +68,11 @@ def openapi_document() -> dict:
         "/api/v2/work-items",
         "/api/v2/work-items/{id}",
         "/api/v2/work-items/{id}/accept",
+        "/api/v2/work-items/{id}/deliveries",
         "/api/v2/attention",
+        "/api/v2/attention/{id}/dismiss",
+        "/api/v2/superagent/policy",
+        "/api/v2/superagent/overview",
         "/api/v2/executions/{id}/lease",
         "/api/v2/executions/{id}/delivery-ack",
         "/api/v2/hardware/commands",
@@ -80,17 +87,26 @@ def openapi_document() -> dict:
             "description": (
                 "自治协议 v2。fleet v1 仍兼容；outbox 对本中心落地确认，"
                 "对已配置 fleet_link peer 尝试真实投递；未知远端记 waiting。"
-                "能力协商：superagent_control=1。"
+                "能力协商：superagent_control=1、client_session=1、attention_inbox=1。"
             ),
         },
         "paths": {
             **{path: {"post": {"summary": path}} for path in all_paths},
             "/api/v2/openapi.json": {"get": {"summary": "openapi"}},
             "/api/v2/attention": {"get": {"summary": "list attention"}},
+            "/api/v2/superagent/policy": {"get": {"summary": "policy"}, "put": {"summary": "policy"}},
+            "/api/v2/superagent/overview": {"get": {"summary": "overview"}},
             "/api/v2/metrics": {"get": {"summary": "metrics"}},
         },
         "x-protocol-version": PROTOCOL_VERSION,
-        "x-features": {"superagent_control": 1},
+        "x-features": {
+            "superagent_control": 1,
+            "client_session": 1,
+            "attention_inbox": 1,
+            "silent_delivery": 1,
+            "feishu_inbound": 1,
+            "worker_slots": 1,
+        },
     }
 
 
@@ -104,6 +120,20 @@ class NodeEnrollRequest(BaseModel):
     voucher: str
     node_id: str = ""
     protocol_version: int = 2
+
+
+class ClientEnrollRequest(BaseModel):
+    enroll_token: str
+    center_id: str
+    client_id: str = ""
+    workspace_id: str = "cyber"
+    device_id: str = ""
+    ttl_seconds: int = 30 * 24 * 3600
+    protocol_version: int = 2
+
+
+class ClientRefreshRequest(BaseModel):
+    ttl_seconds: int = 30 * 24 * 3600
 
 
 class HeartbeatRequest(BaseModel):
@@ -248,6 +278,48 @@ async def enroll_node(req: NodeEnrollRequest) -> dict:
         role = voucher.role
     logger.info("node enrolled node_id=%s role=%s", node_id, role)
     return {"node_id": node_id, "node_token": raw, "role": role}
+
+
+@router.post("/clients/enroll", status_code=201)
+async def enroll_client(req: ClientEnrollRequest, request: Request) -> dict:
+    """用 FLEET_ENROLL_TOKEN + center_id 换取 Client Session（对话用，不可 claim）。"""
+    _check_protocol(req.protocol_version)
+    from app.core.client_session import ClientSessionError, enroll
+
+    settings = request.app.state.settings
+    try:
+        return await enroll(
+            enroll_token=req.enroll_token,
+            expected_token=settings.fleet_enroll_token,
+            center_id=req.center_id,
+            client_id=req.client_id,
+            workspace_id=req.workspace_id,
+            device_id=req.device_id,
+            ttl_seconds=req.ttl_seconds,
+        )
+    except ClientSessionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post("/clients/refresh")
+async def refresh_client(
+    req: ClientRefreshRequest,
+    x_client_token: str = Header(default=""),
+) -> dict:
+    from app.core.client_session import ClientSessionError, refresh
+
+    try:
+        return await refresh(x_client_token, ttl_seconds=req.ttl_seconds)
+    except ClientSessionError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+
+
+@router.post("/clients/revoke")
+async def revoke_client(x_client_token: str = Header(default="")) -> dict:
+    from app.core.client_session import revoke
+
+    ok = await revoke(x_client_token)
+    return {"ok": True, "revoked": ok}
 
 
 @router.post("/nodes/heartbeat")
@@ -605,6 +677,76 @@ async def attention_list() -> dict:
     from app.core.supervisor import list_open
 
     return {"items": await list_open()}
+
+
+@router.post("/attention/{attention_id}/dismiss")
+async def attention_dismiss(attention_id: str) -> dict:
+    from app.core.supervisor import dismiss
+
+    ok = await dismiss(attention_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="attention not found")
+    return {"ok": True, "id": attention_id, "status": "dismissed"}
+
+
+@router.get("/superagent/overview")
+async def superagent_overview(request: Request) -> dict:
+    """健康三问：待办 / 健康 / 近期历史。健康态 compact=true。"""
+    from app.core.overview import build_overview
+
+    return await build_overview(
+        settings=request.app.state.settings,
+        monitor=getattr(request.app.state, "monitor", None),
+    )
+
+
+@router.get("/superagent/policy")
+async def get_superagent_policy() -> dict:
+    from app.domain.superagent import policy as policy_svc
+
+    p = policy_svc.load_policy()
+    return {
+        "version": p.version,
+        "mode": p.mode,
+        "allowed_sources": p.allowed_sources,
+        "allowed_actors": p.allowed_actors,
+    }
+
+
+class PolicyUpdateRequest(BaseModel):
+    mode: str = ""
+    allowed_sources: list[str] | None = None
+    allowed_actors: list[str] | None = None
+
+
+@router.put("/superagent/policy")
+async def put_superagent_policy(req: PolicyUpdateRequest) -> dict:
+    from app.domain.superagent import policy as policy_svc
+
+    updates: dict = {}
+    if req.mode:
+        updates["mode"] = req.mode
+    if req.allowed_sources is not None:
+        updates["allowed_sources"] = req.allowed_sources
+    if req.allowed_actors is not None:
+        updates["allowed_actors"] = req.allowed_actors
+    if not updates:
+        p = policy_svc.load_policy()
+    else:
+        p = policy_svc.bump_policy(**updates)
+    return {
+        "version": p.version,
+        "mode": p.mode,
+        "allowed_sources": p.allowed_sources,
+        "allowed_actors": p.allowed_actors,
+    }
+
+
+@router.get("/work-items/{work_item_id}/deliveries")
+async def work_item_deliveries(work_item_id: str) -> dict:
+    from app.core import delivery as delivery_svc
+
+    return {"items": await delivery_svc.list_for_work_item(work_item_id, include_acked=True)}
 
 
 @router.post("/executions/{execution_id}/lease")
